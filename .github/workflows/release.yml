@@ -1,0 +1,85 @@
+name: Release
+
+# Every push to main that touches the app builds a universal DMG and publishes it as a new
+# GitHub release (next patch version; see scripts/next-version.sh). Docs-only pushes don't release.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Resources/**"
+      - "Tests/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - "Makefile"
+      - "scripts/**"
+      - ".github/workflows/release.yml"
+      - ".github/release-notes.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags are needed to pick the next version
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Pick version
+        id: version
+        run: scripts/next-version.sh >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already released
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION already exists; nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stamp version
+        if: steps.check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Resources/Info.plist
+
+      - name: Build DMG
+        if: steps.check.outputs.exists == 'false'
+        run: make dmg
+
+      - name: Publish release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DMG="build/Sightline-$VERSION.dmg"
+          (cd build && shasum -a 256 "Sightline-$VERSION.dmg" > "Sightline-$VERSION.dmg.sha256")
+          gh release create "v$VERSION" "$DMG" "$DMG.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "Sightline $VERSION" \
+            --notes-file .github/release-notes.md \
+            --generate-notes

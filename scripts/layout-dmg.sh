@@ -14,7 +14,9 @@ MOUNT="/Volumes/$VOL"
 trap 'hdiutil detach "$DEVICE" -quiet || hdiutil detach "$DEVICE" -force -quiet' EXIT
 
 # Window: 660x400 content (+28 pt title bar), icons at the spots the background leaves clear.
-osascript <<EOF
+# Non-fatal: if Finder can't be scripted (e.g. a headless CI runner), the DMG still works, just
+# without the custom window layout.
+osascript <<EOF || echo "warning: Finder layout failed; building the DMG without a custom window layout" >&2
 tell application "Finder"
     tell disk "$VOL"
         open

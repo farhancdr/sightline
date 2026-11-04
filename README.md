@@ -63,7 +63,12 @@ So Sightline does just those things, quickly.
 
 Requires macOS 14 (Sonoma) or later, on Apple Silicon or Intel.
 
-Build the app or the DMG from source:
+**Download** the latest `Sightline-x.y.z.dmg` from
+[Releases](https://github.com/farhancdr/sightline/releases/latest), open it and drag Sightline to Applications.
+Every push to `main` that changes the app publishes a new release automatically
+([workflow](.github/workflows/release.yml)).
+
+Or build it from source:
 
 ```bash
 git clone https://github.com/farhancdr/sightline.git
@@ -111,6 +116,10 @@ make dmg        # universal DMG (scripts/layout-dmg.sh asks Finder to lay out th
 
 # Smoke test against a real workspace:
 SIGHTLINE_ROOT=~/path/to/your/workspace swift test --filter LiveRootTests
+
+# Next release version (what CI will publish): bump CFBundleShortVersionString in
+# Resources/Info.plist to start a new major/minor series, otherwise CI bumps the patch.
+scripts/next-version.sh
 
 # Re-render the DMG background and README banner after editing the SVGs in Resources/Design/source:
 swift scripts/render-assets.swift
