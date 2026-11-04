@@ -20,6 +20,9 @@ struct ExplorerView: View {
                     .tag(row.id)
                     .id(row.id)
                     .contextMenu {
+                        if !row.node.isDirectory, let editor = store.preferredEditor {
+                            Button("Open in \(editor.name)") { store.openExternally(path: row.node.path) }
+                        }
                         Button("Copy Relative Path") { copy(rootRelative(row.node)) }
                         Button("Copy Path") { copy(row.node.path) }
                         Button("Reveal in Finder") {

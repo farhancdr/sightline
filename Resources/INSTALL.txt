@@ -22,6 +22,8 @@ Shortcuts
 ---------
   Cmd P          Go to file (all repos)
   Cmd T          Find repo
+  Shift Cmd F    Search in files across all repos
+  Option - / =   Go back / forward
   Cmd B          Toggle repo sidebar
   Shift Cmd B    Toggle Changes/Files panel
   Cmd J          Toggle terminal
@@ -31,5 +33,11 @@ Shortcuts
   Cmd F          Find in file
   Shift Cmd C    Copy path:line (or path:from-to) for AI agents
   Cmd Return     Commit
+  Cmd 1 / 2 / 3  Changes / Files / History
+  Option Cmd V   Toggle "reviewed" for the selected file
+  Shift Cmd E    Open in your editor at the caret line
+  Option Cmd R   Reveal in Finder
+  Shift Cmd L    Pull
+  Shift Cmd K    Push
   Shift Cmd T    Cycle theme (System / Light / Dark)
   Cmd R          Refresh all repos

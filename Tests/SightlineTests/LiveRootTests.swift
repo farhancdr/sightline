@@ -38,6 +38,14 @@ final class LiveRootTests: XCTestCase {
             print("QUERY \(query) -> \(top)")
         }
 
+        // Workspace search timing.
+        for query in ["copyExistingData", "import"] {
+            let started = Date()
+            let found = await WorkspaceSearch.search(query, options: WorkspaceSearchOptions(), repos: repos, root: root)
+            print("SEARCH \(query): \(found.matchCount)\(found.truncated ? "+" : "") matches in \(found.files.count) files, "
+                + "\(String(format: "%.2f", Date().timeIntervalSince(started)))s")
+        }
+
         // Diff + branches on the root repo.
         let rootRepo = try XCTUnwrap(repos.first)
         let branches = try await GitCommands.branches(rootRepo.path)

@@ -44,6 +44,7 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
 
 ## Conventions
 
+- Toolchain: Swift 6.2+ (swift-markdown 0.9 needs tools 6.2; CI uses the latest Xcode on macos-latest).
 - Swift 5 language mode (`swift-tools-version:5.10`) on a Swift 6 toolchain. SwiftTerm's delegates aren't
   Sendable-annotated; don't switch to Swift 6 mode casually.
 - No resources in the SwiftPM target: the generated `Bundle.module` accessor `fatalError`s inside a packaged
@@ -52,6 +53,7 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
 - Git is always the `git` CLI (hooks/credentials/config behave like the terminal), never libgit2.
 - Colors come from `Palette` / `Color.gh*`, never hardcoded system colors.
 - Persisted preferences live in `UserDefaults` (bundle id `io.github.farhancdr.sightline`).
+- Pull is `--ff-only` and push never forces; surface git's error instead of merging/rebasing for the user.
 - Commits: short imperative subject. Releases are automatic; bump `CFBundleShortVersionString` in
   `Resources/Info.plist` only to start a new major/minor series (CI bumps the patch from the latest tag).
 
@@ -81,6 +83,35 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
 - **Release builds:** `RELEASE_FLAGS` remaps source paths (`-Xswiftc -file-prefix-map -Xswiftc …`, two
   tokens) and `strip -S -x` removes debug maps, so binaries don't embed local absolute paths.
   The combined `--arch arm64 --arch x86_64` build fails; build each arch and `lipo`.
+- **Markdown preview:** `MarkdownRenderer` walks the swift-markdown AST itself. swift-markdown's `HTMLFormatter`
+  does not HTML-escape text or code, so never use it. The WKWebView runs with page JavaScript disabled; live
+  updates replace `#content` via `evaluateJavaScript(… contentWorld: .defaultClient)` to keep scroll position.
+  The preview replaces the editor (no split). Mermaid (`Resources/Vendor/mermaid.min.js`, copied into the .app
+  via `APP_RES`) and its render routine are injected as `WKUserScript`s in `.defaultClient`, so diagrams render
+  while page scripts stay disabled (`MermaidPreviewTests` checks both). `replaceText` posts
+  `NSText.didChangeNotification` so disk reloads refresh the preview.
+- **Workspace search:** `WorkspaceSearch` runs `git grep -z -n --column --untracked -m 100` per repo (8 in
+  parallel), `-P` for regex with a `-E` fallback; highlight ranges come from an equivalent `NSRegularExpression`
+  (validated first). `-z` output is `path\0line\0col\0text`. Results cap at 2000 matches. The type is named
+  `WorkspaceSearchOptions` because SwiftTerm exports a `SearchOptions`.
+- **Navigation:** jumps go through `AppStore.open(path:line:column:length:record:)`, which records the caret for
+  ⌥-/⌥= and reveals the location once the file loads (`pendingReveal`).
+- **Dividers:** use `VerticalRule` (theme border color); the system split divider is invisible on the dark sidebar.
 - **SVG text:** macOS's SVG renderer ignores font-weight/letter-spacing/tspan colors; `render-assets.swift`
   strips `<text>` and draws it with the system font.
+- **Terminal:** colors default to Dark even in the light app theme (shell prompts like powerlevel10k are themed
+  for dark terminals and SwiftTerm has no minimum-contrast option). Metal rendering is on by default; it needs
+  `SwiftTerm_SwiftTerm.bundle` (Shaders.metal) in `Contents/Resources`, so it only works in the packaged app,
+  not in `swift test`. Renderer choice is logged (`subsystem == "io.github.farhancdr.sightline"`): read it with
+  `/usr/bin/log show` (in zsh, plain `log` is a shell builtin).
 - **Tests must not touch user state:** use injected `NSPasteboard(name:)` and temp git repos.
+- **stdin to git:** `Git.run(input:)` writes stdin on its own queue, concurrently with the stdout/stderr
+  drains; writing it inline deadlocks once the input exceeds the pipe buffer.
+- **Review marks:** a mark is `fileID → fingerprint` (staged: index blob id from porcelain `hI`; otherwise
+  mtime+size). Fingerprints are recomputed on every `refresh()`, not only when the status changes: an agent
+  re-editing an already-modified file leaves `git status` byte-identical.
+- **Blame:** always `git blame --porcelain --contents - -- <path>` with the editor buffer on stdin, so unsaved
+  edits don't misalign lines; details for a sha appear only on its first occurrence. Stale runs are dropped by a
+  generation counter and the annotation is hidden while typing.
+- **History:** log uses `%x1f`/`%x1e` separators (subjects can contain anything); a commit's files/diff are
+  against its first parent (`<sha>^`), root commits via `diff-tree --root` / `show --root`.

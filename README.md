@@ -35,8 +35,12 @@ So Sightline does just those things, quickly.
 **Made for multi-repo workspaces**
 - Scans a root folder and finds every nested git repo (plain nested repos, not only submodules).
 - A sidebar with every repo, its branch, ahead/behind counts and number of changed files, all live.
+  One click filters it down to **only the repos with changes or unpushed commits**.
 - Changes made by an agent or in a terminal show up immediately (FSEvents watcher, no polling, no manual refresh).
 - **⌘P: Go to File across every repo**, fuzzy-matched (≈15k files indexed in ~0.2 s via `git ls-files`).
+- **⇧⌘F: search inside files across every repo**, like VS Code: match case, whole word, regex, files to
+  include/exclude. Results are grouped by file with highlighted matches; ~0.5 s across 50 repos.
+- **⌥- / ⌥=: go back / forward** through the places you jumped from (search results, ⌘P, the explorer).
 - **⌘T: jump to a repo**, sorted by folder or by most recently opened.
 
 **Made for reviewing AI changes**
@@ -46,14 +50,25 @@ So Sightline does just those things, quickly.
 - **⇧⌘C copies `path:line` or `path:from-to`** (relative to the workspace root) for the caret or selection,
   in the editor or the diff. Hover a line number for a one-click copy button. Paste it straight into
   Claude Code, Cursor, Codex or any other agent.
+- **Mark files as reviewed** (like GitHub's "Viewed"). A mark only holds while the file is unchanged: if the
+  agent touches it again, it's back to unreviewed. Marking moves you to the next unreviewed file.
+- **Line blame, GitLens style**: the current line shows who last changed it, when, and the commit subject.
+  Click it to open that commit.
+- **History**: every repo's commits with branch/tag labels and an "unpushed" badge, the full message, the files
+  each commit changed, and a whole-file diff per file. This is how you review what the agent already committed.
 - Stage, unstage and discard per file or per section, then **Commit** or **Commit (No Verify)**. Git hooks
   run with your login-shell `PATH`, so husky/lint-staged find `node`/`npx` even when the app is opened from Finder.
-- Branch switching (local and remote) and fetch.
+- **Fetch, Pull (fast-forward only) and Push** (publishes new branches), plus branch switching.
+- **Open in your editor at the exact line** (VS Code, Cursor, Windsurf, Zed, Sublime Text, Xcode), or reveal in Finder.
 
 **Just enough to fix things by hand**
 - File explorer with git status colors, a plain-text editor (syntax highlighting, find, auto-indent, ⌘S).
+- **Markdown preview** (⇧⌘V, or the eye icon): GitHub-styled, with highlighted code blocks and
+  **Mermaid diagrams rendered as pictures**. Handy for the plans and design notes agents write; it refreshes when
+  the agent edits the file.
 - **One terminal per repo**, already `cd`'d into it and kept alive while you switch repos (⌘J to toggle,
-  ⌥J to kill and relaunch).
+  ⌥J to kill and relaunch). GPU (Metal) rendering, 10,000 lines of scrollback, and your Nerd Font is picked up
+  automatically so prompt icons render. Terminal colors stay dark by default (View → Terminal Colors).
 
 **Light**
 - Native SwiftUI/AppKit, about 4 MB, no Electron, no extensions, no language servers, no indexing of `node_modules`.
@@ -78,7 +93,7 @@ make install     # builds Sightline.app and copies it to /Applications
 make dmg         # universal build/Sightline-<version>.dmg with a drag-to-Applications window
 ```
 
-You need Xcode 16+ (Swift 6 toolchain). The package builds in Swift 5 language mode.
+You need Xcode 26+ (Swift 6.2 toolchain). The package builds in Swift 5 language mode.
 
 Builds aren't notarized yet, so the first time you open a downloaded build, macOS blocks it. Allow it once
 via **System Settings → Privacy & Security → Open Anyway**, or run
@@ -90,6 +105,8 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 |---|---|
 | ⌘P | Go to file (all repos) |
 | ⌘T | Find repo (⏎ opens the top match, ⎋ clears) |
+| ⇧⌘F | Search in files across all repos (Aa / ab / .* toggles) |
+| ⌥- / ⌥= | Go back / forward |
 | ⇧⌘C | Copy `path:line` / `path:from-to` for the caret or selection |
 | ⌘B | Show / hide the repo sidebar |
 | ⇧⌘B | Show / hide the Changes/Files panel |
@@ -97,7 +114,13 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 | ⌥J | Kill the repo's terminal and start a fresh one |
 | ⌃` | Focus the terminal |
 | ⌘⏎ | Commit |
+| ⌘1 / ⌘2 / ⌘3 | Changes / Files / History |
+| ⌥⌘V | Toggle "reviewed" for the selected file |
+| ⇧⌘E | Open the focused file in your editor at the caret line |
+| ⌥⌘R | Reveal in Finder |
+| ⇧⌘L / ⇧⌘K | Pull / Push |
 | ⌘S | Save file |
+| ⇧⌘V | Markdown preview ↔ source |
 | ⌘F | Find in file |
 | ⇧⌘T | Cycle theme (System → Light → Dark) |
 | ⌘O | Open a root folder |
@@ -148,6 +171,14 @@ scripts/          DMG layout and asset rendering
   fast instead of hanging.
 - Syntax highlighting is a small hand-written scanner, not a parser: fast, with no dependencies, and good enough
   for reviewing.
+
+## Third-party
+
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT): terminal emulator
+- [swift-markdown](https://github.com/swiftlang/swift-markdown) (Apache 2.0): markdown parser
+- [Mermaid](https://mermaid.js.org) (MIT): diagrams in the markdown preview, bundled at
+  `Resources/Vendor/mermaid.min.js` ([license](Resources/Vendor/MERMAID-LICENSE)); update with
+  `scripts/update-mermaid.sh <version>`
 
 ## Contributing
 

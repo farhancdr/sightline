@@ -288,3 +288,473 @@ final class DiffReferenceTests: XCTestCase {
         XCTAssertEqual(runs.map { [$0.start, $0.end] }, [[1, 3], [4, 5]])
     }
 }
+
+final class SyncTests: XCTestCase {
+    private var base: URL!
+
+    override func setUp() async throws {
+        base = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-sync-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws { try? FileManager.default.removeItem(at: base) }
+
+    private func makeClone(_ name: String, remote: URL) async throws -> String {
+        let path = base.appendingPathComponent(name).path
+        _ = try await Git.run(["clone", "-q", remote.path, path], in: base.path)
+        _ = try await Git.run(["config", "user.email", "t@t"], in: path)
+        _ = try await Git.run(["config", "user.name", "t"], in: path)
+        return path
+    }
+
+    private func commitFile(_ repo: String, _ name: String, _ text: String) async throws {
+        try text.write(toFile: repo + "/" + name, atomically: true, encoding: .utf8)
+        try await GitCommands.stage(repo, paths: [name])
+        try await GitCommands.commit(repo, message: "add \(name)", noVerify: true)
+    }
+
+    func testPublishPushPullAndDivergence() async throws {
+        let remote = base.appendingPathComponent("remote.git")
+        _ = try await Git.run(["init", "-q", "--bare", "-b", "main", remote.path], in: base.path)
+
+        // A: new local repo with a remote but no upstream yet → publish with -u.
+        let a = base.appendingPathComponent("a").path
+        _ = try await Git.run(["init", "-q", "-b", "main", a], in: base.path)
+        _ = try await Git.run(["config", "user.email", "t@t"], in: a)
+        _ = try await Git.run(["config", "user.name", "t"], in: a)
+        _ = try await Git.run(["remote", "add", "origin", remote.path], in: a)
+        try await commitFile(a, "one.txt", "1\n")
+        var status = try await GitCommands.status(a)
+        XCTAssertNil(status.upstream)
+        try await GitCommands.push(a, hasUpstream: false)
+        status = try await GitCommands.status(a)
+        XCTAssertEqual(status.upstream, "origin/main")
+
+        // B clones, A pushes again, B pulls (fast-forward).
+        let b = try await makeClone("b", remote: remote)
+        try await commitFile(a, "two.txt", "2\n")
+        try await GitCommands.push(a, hasUpstream: true)
+        try await GitCommands.pull(b)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: b + "/two.txt"))
+
+        // Diverge: both commit; B's pull --ff-only must fail with git's message, not merge.
+        try await commitFile(a, "three.txt", "3\n")
+        try await GitCommands.push(a, hasUpstream: true)
+        try await commitFile(b, "four.txt", "4\n")
+        do {
+            try await GitCommands.pull(b)
+            XCTFail("diverged pull should fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.lowercased().contains("fast-forward"), error.localizedDescription)
+        }
+        let parents = try await Git.run(["log", "-1", "--format=%P"], in: b).output.split(separator: " ")
+        XCTAssertEqual(parents.count, 1, "no merge commit was created")
+    }
+
+    func testStdinInputIsPassedToGit() async throws {
+        let repo = base.appendingPathComponent("r").path
+        _ = try await Git.run(["init", "-q", repo], in: base.path)
+        let big = String(repeating: "line of text\n", count: 20_000) // > pipe buffer
+        let hash = try await Git.run(["hash-object", "--stdin"], in: repo, input: Data(big.utf8)).output
+        XCTAssertEqual(hash.trimmingCharacters(in: .whitespacesAndNewlines).count, 40)
+    }
+}
+
+final class ReviewStateTests: XCTestCase {
+    func testIndexHashParsed() {
+        let status = StatusParser.parse("1 MM N... 100644 100644 100644 aaa bbb src/a.ts\0")
+        XCTAssertEqual(status.files.map(\.indexHash), ["bbb", "bbb"])
+    }
+
+    func testFingerprintChangesWhenAgentEditsAgain() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-review-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let repo = dir.path
+        for args in [["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]] {
+            _ = try await Git.run(args, in: repo)
+        }
+        let file = dir.appendingPathComponent("a.txt")
+        try "v1\n".write(to: file, atomically: true, encoding: .utf8)
+        try await GitCommands.stage(repo, paths: ["a.txt"])
+        try await GitCommands.commit(repo, message: "init", noVerify: true)
+
+        // Agent edit #1 → reviewed fingerprint.
+        try "v2\n".write(to: file, atomically: true, encoding: .utf8)
+        let first = try await GitCommands.status(repo)
+        let change = try XCTUnwrap(first.files.first)
+        let marked = ReviewState.fingerprint(change, repoPath: repo)
+
+        // Agent edit #2: git status is identical ("M a.txt") but the fingerprint must differ.
+        try await Task.sleep(for: .milliseconds(20))
+        try "v3 longer\n".write(to: file, atomically: true, encoding: .utf8)
+        let second = try await GitCommands.status(repo)
+        XCTAssertEqual(first, second, "porcelain status alone can't see the second edit")
+        XCTAssertNotEqual(ReviewState.fingerprint(try XCTUnwrap(second.files.first), repoPath: repo), marked)
+
+        // Staged entries fingerprint by index blob: restaging new content changes it.
+        try await GitCommands.stage(repo, paths: ["a.txt"])
+        let afterStage = try await GitCommands.status(repo)
+        let staged = try XCTUnwrap(afterStage.files.first { $0.area == .staged })
+        let stagedPrint = ReviewState.fingerprint(staged, repoPath: repo)
+        try "v4\n".write(to: file, atomically: true, encoding: .utf8)
+        try await GitCommands.stage(repo, paths: ["a.txt"])
+        let afterRestage = try await GitCommands.status(repo)
+        let restaged = try XCTUnwrap(afterRestage.files.first { $0.area == .staged })
+        XCTAssertNotEqual(ReviewState.fingerprint(restaged, repoPath: repo), stagedPrint)
+    }
+
+    func testEditorURLs() {
+        XCTAssertEqual(
+            ExternalEditor.fileURL(scheme: "vscode", path: "/Users/me/my repo/a.ts", line: 42)?.absoluteString,
+            "vscode://file/Users/me/my%20repo/a.ts:42"
+        )
+        XCTAssertEqual(ExternalEditor.fileURL(scheme: "cursor", path: "/x/b.go", line: nil)?.absoluteString, "cursor://file/x/b.go")
+        XCTAssertEqual(DiffRows.nearestNumber(to: 1, in: [10, nil, nil, 11]), 11)
+        XCTAssertEqual(DiffRows.nearestNumber(to: 3, in: [10, nil, nil, nil]), 10)
+    }
+}
+
+final class HistoryTests: XCTestCase {
+    func testParsers() {
+        let record = ["abc123", "abc", "Jane Doe", "j@x.io", "1700000000", "p1 p2", "HEAD -> main, tag: v1",
+                      "feat: weird | subject\twith tab"].joined(separator: "\u{1f}") + "\u{1e}\n"
+        let commits = LogParser.parse(record + record.replacingOccurrences(of: "abc123", with: "def456"))
+        XCTAssertEqual(commits.map(\.sha), ["abc123", "def456"])
+        XCTAssertEqual(commits[0].subject, "feat: weird | subject\twith tab")
+        XCTAssertEqual(commits[0].parents, ["p1", "p2"])
+        XCTAssertTrue(commits[0].isMerge)
+        XCTAssertEqual(commits[0].refs, ["HEAD -> main", "tag: v1"])
+
+        let files = LogParser.parseNameStatus("M\0src/a.ts\0R087\0old/b.ts\0new/b.ts\0D\0gone.txt\0")
+        XCTAssertEqual(files.map(\.path), ["src/a.ts", "new/b.ts", "gone.txt"])
+        XCTAssertEqual(files[1].originalPath, "old/b.ts")
+        XCTAssertEqual(files.map(\.code), ["M", "R", "D"])
+    }
+
+    func testRealRepoHistoryFilesAndDiffs() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-history-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let repo = dir.path
+        for args in [["init", "-q", "-b", "main"], ["config", "user.email", "t@t"], ["config", "user.name", "Tess"]] {
+            _ = try await Git.run(args, in: repo)
+        }
+        func write(_ name: String, _ text: String) throws {
+            let url = dir.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        try write("a.txt", "one\ntwo\nthree\n")
+        try write("old/name.txt", "same content for rename detection\nline 2\nline 3\n")
+        _ = try await Git.run(["add", "-A"], in: repo)
+        try await GitCommands.commit(repo, message: "root commit", noVerify: true)
+        try write("a.txt", "one\nTWO\nthree\n")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("new"), withIntermediateDirectories: true)
+        _ = try await Git.run(["mv", "old/name.txt", "new/name.txt"], in: repo)
+        _ = try await Git.run(["add", "-A"], in: repo)
+        try await GitCommands.commit(repo, message: "edit | rename\n\nbody text", noVerify: true)
+
+        let log = try await GitCommands.log(repo)
+        XCTAssertEqual(log.map(\.subject), ["edit | rename", "root commit"])
+        XCTAssertTrue(log[1].isRoot)
+        XCTAssertEqual(log[0].author, "Tess")
+        let message = try await GitCommands.message(repo, sha: log[0].sha)
+        XCTAssertEqual(message, "edit | rename\n\nbody text")
+        let unpushed = await GitCommands.unpushed(repo)
+        XCTAssertTrue(unpushed.isEmpty, "no upstream → nothing reported")
+
+        let files = try await GitCommands.commitFiles(repo, commit: log[0])
+        XCTAssertEqual(Set(files.map(\.path)), ["a.txt", "new/name.txt"])
+        XCTAssertEqual(files.first { $0.path == "new/name.txt" }?.originalPath, "old/name.txt")
+        let a = try XCTUnwrap(files.first { $0.path == "a.txt" })
+        let doc = DiffDocument.build(from: try await GitCommands.commitDiff(repo, commit: log[0], file: a), path: "a.txt", rowLimit: nil)
+        XCTAssertEqual(doc.left.kinds, [.context, .removed, .context])
+        XCTAssertEqual(doc.right.kinds, [.context, .added, .context])
+
+        let rootFiles = try await GitCommands.commitFiles(repo, commit: log[1])
+        XCTAssertEqual(Set(rootFiles.map(\.path)), ["a.txt", "old/name.txt"])
+        let rootA = try XCTUnwrap(rootFiles.first { $0.path == "a.txt" })
+        let rootDoc = DiffDocument.build(
+            from: try await GitCommands.commitDiff(repo, commit: log[1], file: rootA), path: "a.txt", rowLimit: nil
+        )
+        XCTAssertEqual(rootDoc.additions, 3)
+        XCTAssertTrue(rootDoc.isOneSided)
+    }
+}
+
+final class BlameTests: XCTestCase {
+    private let a = String(repeating: "a", count: 40)
+    private let zero = String(repeating: "0", count: 40)
+
+    func testPorcelainParserWithRepeatedShaAndUncommittedLine() {
+        let output = """
+        \(a) 1 1 2
+        author Ana
+        author-mail <ana@x.io>
+        author-time 1700000000
+        summary First commit
+        filename f.ts
+        \tline one
+        \(a) 2 2
+        \tline two
+        \(zero) 3 3 1
+        author External file (--contents)
+        author-mail <external.file>
+        author-time 1700000500
+        summary Version of f.ts from f.ts
+        filename f.ts
+        \tline three edited
+        """
+        let result = BlameParser.parse(output)
+        XCTAssertEqual(result.lineCommits, [a, a, zero])
+        XCTAssertEqual(result.commit(forLine: 1)?.author, "Ana")
+        XCTAssertEqual(result.commit(forLine: 1)?.email, "ana@x.io")
+        XCTAssertTrue(result.commit(forLine: 2)?.isUncommitted ?? false)
+        XCTAssertNil(result.commit(forLine: 3))
+    }
+
+    func testAnnotationText() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000 + 3 * 86_400)
+        let commit = BlameCommit(sha: a, author: "Ana", email: "ana@x.io",
+                                 date: Date(timeIntervalSince1970: 1_700_000_000), summary: "Fix login redirect")
+        XCTAssertEqual(EditorController.annotation(for: commit, userEmail: "someone@else", now: now),
+                       "Ana, 3 days ago · Fix login redirect")
+        XCTAssertTrue(EditorController.annotation(for: commit, userEmail: "ANA@x.io", now: now).hasPrefix("You, "))
+        let uncommitted = BlameCommit(sha: zero, author: "", email: "", date: now, summary: "")
+        XCTAssertEqual(EditorController.annotation(for: uncommitted, userEmail: nil), "You · Uncommitted changes")
+    }
+
+    func testRealBlameAgainstUnsavedBuffer() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-blame-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let repo = dir.path
+        for args in [["init", "-q"], ["config", "user.email", "ana@x.io"], ["config", "user.name", "Ana"]] {
+            _ = try await Git.run(args, in: repo)
+        }
+        try "one\ntwo\nthree\n".write(to: dir.appendingPathComponent("f.txt"), atomically: true, encoding: .utf8)
+        try await GitCommands.stage(repo, paths: ["f.txt"])
+        try await GitCommands.commit(repo, message: "add f", noVerify: true)
+
+        // Unsaved buffer inserts a line at the top: committed lines must shift down, not misalign.
+        let buffer = "NEW\none\ntwo\nthree\n"
+        let blame = try await GitCommands.blame(repo, path: "f.txt", contents: buffer)
+        XCTAssertEqual(blame.lineCommits.count, 4)
+        XCTAssertTrue(blame.commit(forLine: 0)?.isUncommitted ?? false)
+        XCTAssertEqual(blame.commit(forLine: 1)?.summary, "add f")
+        XCTAssertEqual(blame.commit(forLine: 3)?.author, "Ana")
+        let email = await GitCommands.userEmail(repo)
+        XCTAssertEqual(email, "ana@x.io")
+    }
+}
+
+final class TerminalSetupTests: XCTestCase {
+    @MainActor
+    func testFontAndMetalRenderer() throws {
+        let font = TerminalManager.preferredFont(size: 12)
+        print("TERMINAL_FONT \(font.familyName ?? "?") fixedPitch=\(font.isFixedPitch)")
+        let installedNerd = NSFontManager.shared.availableFontFamilies.contains { $0.contains("Nerd Font") }
+        if installedNerd { XCTAssertTrue(font.familyName?.contains("Nerd Font") ?? false) }
+
+        let view = SwiftTermProbe.makeView()
+        do { try view.setUseMetal(true) } catch { print("TERMINAL_METAL_ERROR \(error)") }
+        print("TERMINAL_METAL \(view.isUsingMetalRenderer) status=\(view.metalRendererStatus.state)")
+    }
+}
+
+import SwiftTerm
+enum SwiftTermProbe {
+    @MainActor static func makeView() -> TerminalView { TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300)) }
+}
+
+final class MarkdownRendererTests: XCTestCase {
+    func testRenderingAndEscaping() {
+        let md = """
+        # Plan & Notes
+
+        Use `Array<string>` when a < b && "c".
+
+        - [x] done
+        - [ ] todo
+
+        | Name | Count |
+        |:-----|------:|
+        | a<b  | 2     |
+
+        ```ts
+        const x: Array<string> = []; // note
+        ```
+
+        ```diff
+        - old line
+        + new line
+        ```
+
+        <details><summary>More</summary>hidden</details>
+
+        1. one
+           - nested
+        """
+        let html = MarkdownRenderer.body(md)
+        XCTAssertTrue(html.contains("<h1 id=\"plan--notes\">Plan &amp; Notes</h1>"), html)
+        XCTAssertTrue(html.contains("<code>Array&lt;string&gt;</code>"))
+        XCTAssertTrue(html.contains("a &lt; b &amp;&amp; &quot;c&quot;"))
+        XCTAssertTrue(html.contains("<ul class=\"tasks\">"))
+        XCTAssertTrue(html.contains("<input type=\"checkbox\" disabled checked> "))
+        XCTAssertTrue(html.contains("<th align=\"left\">Name</th><th align=\"right\">Count</th>"))
+        XCTAssertTrue(html.contains("<td align=\"left\">a&lt;b</td>"))
+        XCTAssertTrue(html.contains("<span class=\"tok-keyword\">const</span>"))
+        XCTAssertTrue(html.contains("Array&lt;string&gt;"))
+        XCTAssertFalse(html.contains("Array<string>"), "code must be escaped")
+        XCTAssertTrue(html.contains("<span class=\"tok-comment\">// note</span>"))
+        XCTAssertTrue(html.contains("<span class=\"diff-del\">- old line</span><span class=\"diff-add\">+ new line</span>"))
+        XCTAssertTrue(html.contains("<details><summary>More</summary>hidden</details>"))
+        XCTAssertTrue(html.contains("<ol>") && html.contains("<ul>"), "nested lists")
+    }
+
+    func testPageWrapsBody() {
+        let page = MarkdownPage.html(body: "<p>x</p>")
+        XCTAssertTrue(page.contains("<article id=\"content\" class=\"markdown-body\"><p>x</p></article>"))
+        XCTAssertTrue(page.contains("prefers-color-scheme: dark"))
+    }
+}
+
+import WebKit
+
+final class MermaidPreviewTests: XCTestCase {
+    private final class LoadWaiter: NSObject, WKNavigationDelegate {
+        var continuation: CheckedContinuation<Void, Never>?
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    @MainActor
+    func testMermaidRendersInIsolatedWorldAndPageScriptsDoNot() async throws {
+        let vendored = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/Vendor/mermaid.min.js")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: vendored.path), "mermaid.min.js not vendored")
+        MermaidSupport.sourceURLOverride = vendored
+        defer { MermaidSupport.sourceURLOverride = nil }
+
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        MermaidSupport.userScripts().forEach(configuration.userContentController.addUserScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700), configuration: configuration)
+        let waiter = LoadWaiter()
+        webView.navigationDelegate = waiter
+
+        let markdown = """
+        # Flow
+
+        ```mermaid
+        graph TD
+          A[Agent edits] --> B{Reviewed?}
+          B -->|yes| C[Commit]
+        ```
+
+        <script>document.documentElement.setAttribute('data-evil', '1')</script>
+        """
+        await withCheckedContinuation { continuation in
+            waiter.continuation = continuation
+            webView.loadHTMLString(MarkdownPage.html(body: MarkdownRenderer.body(markdown)), baseURL: nil)
+        }
+
+        var rendered = false
+        for _ in 0..<100 {
+            let result = try await webView.evaluateJavaScript(
+                "document.querySelector('.mermaid-svg svg') !== null", contentWorld: .defaultClient
+            )
+            if (result as? Bool) == true { rendered = true; break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(rendered, "mermaid diagram should be rendered to SVG")
+        let evil = try await webView.evaluateJavaScript(
+            "document.documentElement.getAttribute('data-evil')", contentWorld: .defaultClient
+        )
+        XCTAssertTrue(evil == nil || evil is NSNull, "page <script> must not run")
+    }
+}
+
+final class WorkspaceSearchTests: XCTestCase {
+    func testArgumentsAndGlobs() {
+        var options = WorkspaceSearchOptions()
+        let plain = WorkspaceSearch.grepArguments("foo", options: options)
+        XCTAssertTrue(plain.contains("-F") && plain.contains("-i") && !plain.contains("-w"))
+        XCTAssertEqual(Array(plain.suffix(3)), ["-e", "foo", "--"])
+        options.matchCase = true
+        options.wholeWord = true
+        options.regex = true
+        options.include = "*.ts, src/**"
+        options.exclude = "*.spec.ts"
+        let args = WorkspaceSearch.grepArguments("a\\d+", options: options)
+        XCTAssertTrue(args.contains("-P") && args.contains("-w") && !args.contains("-i"))
+        XCTAssertEqual(WorkspaceSearch.pathspecs(options), [":(glob)**/*.ts", ":(glob)src/**", ":(exclude,glob)**/*.spec.ts"])
+        XCTAssertEqual(WorkspaceSearch.pathspecs(WorkspaceSearchOptions(exclude: "dist/**")), [".", ":(exclude,glob)dist/**"])
+    }
+
+    func testPreviewTrimsAndRebasesRanges() throws {
+        let regex = try WorkspaceSearch.highlightRegex("needle", options: WorkspaceSearchOptions())
+        let (text, ranges) = WorkspaceSearch.preview("\t\t  let x = NEEDLE + needle", highlight: regex)
+        XCTAssertEqual(text, "let x = NEEDLE + needle")
+        XCTAssertEqual(ranges.map(\.location), [8, 17])
+        let long = String(repeating: "x", count: 1000) + "needle" + String(repeating: "y", count: 1000)
+        let (cut, cutRanges) = WorkspaceSearch.preview(long, highlight: regex)
+        XCTAssertTrue(cut.hasPrefix("…"))
+        XCTAssertEqual((cut as NSString).substring(with: try XCTUnwrap(cutRanges.first)), "needle")
+    }
+
+    func testRealSearchOptions() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-search-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repoDir = dir.appendingPathComponent("services/api")
+        try FileManager.default.createDirectory(at: repoDir.appendingPathComponent("src"), withIntermediateDirectories: true)
+        let repoPath = repoDir.path
+        for args in [["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]] {
+            _ = try await Git.run(args, in: repoPath)
+        }
+        func write(_ name: String, _ text: String) throws {
+            try text.write(to: repoDir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        try write("src/user.ts", "export function getUser(id: number) {}\nconst userCount = 42;\n// GetUser is here\n")
+        try write("src/user.spec.ts", "getUser(1)\n")
+        try write("src/odd:name.ts", "getUser in a weird file name\n")
+        try write(".gitignore", "dist/\n")
+        try FileManager.default.createDirectory(at: repoDir.appendingPathComponent("dist"), withIntermediateDirectories: true)
+        try write("dist/bundle.js", "getUser compiled\n")
+        _ = try await Git.run(["add", "src/user.ts", ".gitignore"], in: repoPath) // spec + odd file stay untracked
+
+        let repo = Repo(path: repoPath, relativePath: "services/api")
+        func run(_ query: String, _ options: WorkspaceSearchOptions = WorkspaceSearchOptions()) async -> SearchResults {
+            await WorkspaceSearch.search(query, options: options, repos: [repo], root: dir.path)
+        }
+
+        var results = await run("getuser")
+        XCTAssertEqual(Set(results.files.map(\.repoRelativePath)), ["src/user.ts", "src/user.spec.ts", "src/odd:name.ts"],
+                       "case-insensitive, untracked included, ignored dist/ excluded")
+        XCTAssertEqual(results.files.first { $0.repoRelativePath == "src/user.ts" }?.matches.map(\.line), [1, 3])
+        XCTAssertEqual(results.files.first?.displayPath.hasPrefix("services/api/"), true)
+
+        results = await run("getUser", WorkspaceSearchOptions(matchCase: true))
+        XCTAssertEqual(results.files.first { $0.repoRelativePath == "src/user.ts" }?.matches.map(\.line), [1])
+
+        results = await run("user", WorkspaceSearchOptions(wholeWord: true))
+        XCTAssertEqual(results.matchCount, 0, "'user' only appears inside longer words")
+
+        results = await run("Count = \\d+(?=;)", WorkspaceSearchOptions(regex: true))
+        let match = try XCTUnwrap(results.files.first?.matches.first)
+        XCTAssertEqual(match.line, 2)
+        XCTAssertEqual((match.text as NSString).substring(with: try XCTUnwrap(match.ranges.first)), "Count = 42")
+
+        results = await run("getUser", WorkspaceSearchOptions(exclude: "*.spec.ts"))
+        XCTAssertFalse(results.files.contains { $0.repoRelativePath.hasSuffix(".spec.ts") })
+        results = await run("getUser", WorkspaceSearchOptions(include: "*.spec.ts"))
+        XCTAssertEqual(results.files.map(\.repoRelativePath), ["src/user.spec.ts"])
+
+        results = await run("(unclosed", WorkspaceSearchOptions(regex: true))
+        XCTAssertEqual(results.error, "Invalid regular expression")
+    }
+}

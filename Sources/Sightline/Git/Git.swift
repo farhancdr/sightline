@@ -61,7 +61,8 @@ enum Git {
         _ args: [String],
         in repo: String,
         okCodes: Set<Int32> = [0],
-        extraEnv: [String: String] = [:]
+        extraEnv: [String: String] = [:],
+        input: Data? = nil
     ) async throws -> GitResult {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -81,7 +82,8 @@ enum Git {
                 let errPipe = Pipe()
                 process.standardOutput = outPipe
                 process.standardError = errPipe
-                process.standardInput = FileHandle.nullDevice
+                let inPipe = input.map { _ in Pipe() }
+                process.standardInput = inPipe ?? FileHandle.nullDevice
 
                 do {
                     try process.run()
@@ -94,6 +96,17 @@ enum Git {
                 // pipe buffer deadlocks the child.
                 let errBox = DataBox()
                 let group = DispatchGroup()
+                // stdin is written on its own queue, concurrently with draining stdout/stderr:
+                // a large input blocks the writer until git reads it.
+                if let inPipe, let input {
+                    group.enter()
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let handle = inPipe.fileHandleForWriting
+                        try? handle.write(contentsOf: input)
+                        try? handle.close()
+                        group.leave()
+                    }
+                }
                 group.enter()
                 DispatchQueue.global(qos: .userInitiated).async {
                     errBox.data = errPipe.fileHandleForReading.readDataToEndOfFile()

@@ -43,6 +43,41 @@ struct SightlineApp: App {
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 Button("Find Repo…") { store.focusRepoFilter() }
                     .keyboardShortcut("t")
+                Toggle("Show Only Changed Repos", isOn: Binding(
+                    get: { store.showOnlyChanged }, set: { store.showOnlyChanged = $0 }
+                ))
+                Button("Toggle Markdown Preview") { store.toggleMarkdownPreview() }
+                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                Toggle("Show Line Blame", isOn: Binding(get: { store.showLineBlame }, set: { store.showLineBlame = $0 }))
+                Divider()
+                Button("Changes") { store.panel = .changes }
+                    .keyboardShortcut("1")
+                Button("Files") { store.panel = .files }
+                    .keyboardShortcut("2")
+                Button("History") { store.panel = .history }
+                    .keyboardShortcut("3")
+                Button("Search All Repos") { store.showSearch() }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                Divider()
+                Button("Go Back") { store.navigateBack() }
+                    .keyboardShortcut("-", modifiers: .option)
+                Button("Go Forward") { store.navigateForward() }
+                    .keyboardShortcut("=", modifiers: .option)
+            }
+            CommandMenu("Repository") {
+                Button("Fetch") { Task { await store.sync(.fetch) } }
+                Button("Pull") { Task { await store.sync(.pull) } }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Push") { Task { await store.sync(.push) } }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                Divider()
+                Button("Toggle Reviewed") { store.toggleReviewedForSelected() }
+                    .keyboardShortcut("v", modifiers: [.command, .option])
+                Divider()
+                Button("Open in \(store.preferredEditor?.name ?? "Editor")") { store.openFocusedExternally() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button("Reveal in Finder") { store.revealFocusedInFinder() }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
             }
             CommandGroup(after: .toolbar) {
                 Button("Refresh All") { Task { await store.refreshAll() } }
@@ -63,6 +98,12 @@ struct SightlineApp: App {
                 }
                 Button("Toggle Theme") { store.cycleTheme() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
+                Picker("Terminal Colors", selection: Binding(
+                    get: { store.terminalColorScheme }, set: { store.terminalColorScheme = $0 }
+                )) {
+                    ForEach(TerminalManager.ColorScheme.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                Toggle("GPU-Accelerated Terminal", isOn: Binding(get: { store.terminalGPU }, set: { store.terminalGPU = $0 }))
             }
         }
     }
@@ -73,6 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Needed when launched as a bare executable (`swift run`), harmless inside the .app.
+        // Writing to a git process that exited early (e.g. blame of an untracked file, fed via stdin)
+        // must fail with EPIPE, not kill the app with SIGPIPE.
+        signal(SIGPIPE, SIG_IGN)
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         MainActor.assumeIsolated { AppStore.shared.applyTheme() }

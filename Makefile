@@ -11,9 +11,9 @@ DMG_TMP  := /tmp/sightline-dmg
 DMG_DIR  := $(DMG_TMP)/stage
 DMG_RW   := $(DMG_TMP)/layout.dmg
 # Release builds don't embed this machine's absolute source paths (#file literals, debug info).
-RELEASE_FLAGS := -Xswiftc -file-prefix-map -Xswiftc $(CURDIR)=. -Xswiftc -debug-prefix-map -Xswiftc $(CURDIR)=.
+RELEASE_FLAGS := -Xswiftc -file-prefix-map -Xswiftc $(CURDIR)=. -Xswiftc -debug-prefix-map -Xswiftc $(CURDIR)=. -Xcc -ffile-prefix-map=$(CURDIR)=.
 # Files copied into Sightline.app/Contents/Resources (icon + welcome illustration).
-APP_RES  := Resources/AppIcon.icns Resources/welcome-light.svg Resources/welcome-dark.svg
+APP_RES  := Resources/AppIcon.icns Resources/welcome-light.svg Resources/welcome-dark.svg Resources/Vendor/mermaid.min.js
 
 .PHONY: run build test app universal dmg install open clean
 

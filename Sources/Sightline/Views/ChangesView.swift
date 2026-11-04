@@ -10,7 +10,11 @@ struct RepoPanel: View {
             BranchBar(store: store)
             Picker("", selection: $store.panel) {
                 ForEach(AppStore.Panel.allCases, id: \.self) { panel in
-                    Text(panelTitle(panel)).tag(panel)
+                    if panel == .search {
+                        Image(systemName: "magnifyingglass").help("Search all repos (⇧⌘F)").tag(panel)
+                    } else {
+                        Text(panelTitle(panel)).tag(panel)
+                    }
                 }
             }
             .pickerStyle(.segmented)
@@ -25,6 +29,10 @@ struct RepoPanel: View {
                 if let explorer = store.explorer {
                     ExplorerView(store: store, explorer: explorer)
                 }
+            case .history:
+                HistoryList(store: store)
+            case .search:
+                SearchPanel(store: store)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -92,6 +100,12 @@ private struct SectionHeader: View {
             Text("\(area.title.uppercased())  \(files.count)")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            let reviewedCount = store.reviewedCount(files)
+            if reviewedCount > 0 {
+                Text(reviewedCount == files.count ? "all reviewed" : "\(reviewedCount) reviewed")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color.ghAdded)
+            }
             Spacer()
             HStack(spacing: 2) {
                 switch area {
@@ -119,7 +133,17 @@ private struct FileRow: View {
     private var color: Color { Color.ghStatus(file.code) ?? .ghModified }
 
     var body: some View {
+        let isReviewed = store.isReviewed(file)
         HStack(spacing: 6) {
+            Button { store.toggleReviewed(file) } label: {
+                Image(systemName: isReviewed ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isReviewed ? Color.ghAdded : Color.ghMuted.opacity(0.7))
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help(isReviewed ? "Reviewed. Click to unmark (⌥⌘V)." : "Mark as reviewed (⌥⌘V). Resets if the file changes again.")
             Image(systemName: FileIcon.symbol(for: file.fileName))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -127,6 +151,7 @@ private struct FileRow: View {
             Text(file.fileName)
                 .lineLimit(1)
                 .strikethrough(file.code == "D")
+                .foregroundStyle(isReviewed ? Color.ghMuted : Color.ghText)
                 .layoutPriority(1)
             Text(file.originalPath.map { "← \($0)" } ?? file.directory)
                 .font(.caption)
@@ -146,6 +171,10 @@ private struct FileRow: View {
         .contextMenu {
             if file.code != "D" {
                 Button("Open File") { store.openInEditor(repoRelativePath: file.path) }
+                if let editor = store.preferredEditor {
+                    Button("Open in \(editor.name)") { store.openExternally(path: absolutePath) }
+                }
+                Button("Reveal in Finder") { store.revealInFinder(absolutePath) }
             }
             Button("Copy Relative Path") { copyRelativePath() }
         }
@@ -168,6 +197,8 @@ private struct FileRow: View {
             }
         }
     }
+
+    private var absolutePath: String { (store.selectedRepo?.path ?? "") + "/" + file.path }
 
     private func copyRelativePath() {
         guard let repo = store.selectedRepo else { return }
@@ -215,27 +246,53 @@ private struct BranchBar: View {
                 BranchPicker(store: store) { showingPicker = false }
             }
 
-            if let status = store.selectedStatus, status.upstream != nil {
-                Text("↑\(status.ahead) ↓\(status.behind)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .help(status.upstream ?? "")
-            }
-
-            Button {
-                Task { await store.fetchSelected() }
-            } label: {
-                if store.isFetching {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.down.circle")
-                }
-            }
-            .buttonStyle(.borderless)
-            .disabled(store.isFetching)
-            .help("git fetch --prune")
+            SyncButtons(store: store)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+}
+
+/// Fetch / Pull / Push with ahead-behind counts. Only one runs at a time.
+private struct SyncButtons: View {
+    let store: AppStore
+
+    var body: some View {
+        let status = store.selectedStatus
+        let hasUpstream = status?.upstream != nil
+        HStack(spacing: 2) {
+            syncButton(.fetch, symbol: "arrow.triangle.2.circlepath", count: nil,
+                       help: "Fetch (git fetch --prune)")
+            if hasUpstream {
+                syncButton(.pull, symbol: "arrow.down", count: status?.behind,
+                           help: "Pull (fast-forward only) from \(status?.upstream ?? "upstream")")
+            }
+            syncButton(.push, symbol: hasUpstream ? "arrow.up" : "icloud.and.arrow.up", count: hasUpstream ? status?.ahead : nil,
+                       help: hasUpstream ? "Push to \(status?.upstream ?? "upstream")" : "Publish branch (git push -u)")
+        }
+    }
+
+    private func syncButton(_ operation: AppStore.SyncOperation, symbol: String, count: Int?, help: String) -> some View {
+        Button {
+            Task { await store.sync(operation) }
+        } label: {
+            HStack(spacing: 2) {
+                if store.syncing == operation {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                }
+                if let count, count > 0 {
+                    Text("\(count)").font(.caption.monospacedDigit().weight(.semibold))
+                }
+            }
+            .foregroundStyle((count ?? 0) > 0 ? Color.ghAccent : Color.ghMuted)
+            .padding(.horizontal, 4)
+            .frame(height: 20)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .disabled(store.syncing != nil)
+        .help(help)
     }
 }

@@ -1,5 +1,8 @@
 import AppKit
+import os
 import SwiftTerm
+
+private let log = Logger(subsystem: "io.github.farhancdr.sightline", category: "terminal")
 
 /// Owns one shell per repo. All terminal views live in a single container and are switched with
 /// `isHidden` (never removed), so background shells keep their size and running programs.
@@ -17,7 +20,28 @@ final class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
     private var repoByTerminal: [ObjectIdentifier: String] = [:]
     private var visibleRepoID: String?
 
-    var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    /// Terminal colors. Dark by default: shell prompts (powerlevel10k, starship…) are usually themed for dark
+    /// terminals and become unreadable on a light background (SwiftTerm has no minimum-contrast option).
+    enum ColorScheme: String, CaseIterable { case dark = "Dark", light = "Light", matchApp = "Match App Theme" }
+
+    var colorScheme: ColorScheme = .dark { didSet { applyAppearance() } }
+    /// GPU (Metal) rendering, like iTerm2's. Falls back to CoreGraphics if Metal can't start.
+    var useGPU = true { didSet { for terminal in terminals.values { applyRenderer(terminal) } } }
+    static let scrollbackLines = 10_000
+
+    /// A Nerd Font when one is installed (prompt icons), else SF Mono.
+    let font: NSFont = TerminalManager.preferredFont(size: 12)
+
+    static func preferredFont(size: CGFloat) -> NSFont {
+        let families = NSFontManager.shared.availableFontFamilies
+        let pick = families.first { $0.contains("Nerd Font Mono") }
+            ?? families.first { $0.contains("Nerd Font") }
+            ?? families.first { $0.hasSuffix(" NF") || $0.contains("MesloLGS") }
+        if let pick, let font = NSFontManager.shared.font(withFamily: pick, traits: [], weight: 5, size: size) {
+            return font
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
 
     func show(_ repo: Repo) {
         guard visibleRepoID != repo.id || terminals[repo.id] == nil else { return }
@@ -64,7 +88,22 @@ final class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
     // MARK: Appearance
 
     private var isDark: Bool {
-        NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        switch colorScheme {
+        case .dark: true
+        case .light: false
+        case .matchApp: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+    }
+
+    private func applyRenderer(_ terminal: LocalProcessTerminalView) {
+        guard terminal.isUsingMetalRenderer != useGPU else { return }
+        do {
+            try terminal.setUseMetal(useGPU)
+        } catch {
+            // Stays on CoreGraphics.
+            log.error("Metal renderer unavailable: \(String(describing: error), privacy: .public)")
+        }
+        log.notice("terminal renderer: \(terminal.isUsingMetalRenderer ? "metal" : "coregraphics", privacy: .public)")
     }
 
     func applyAppearance() {
@@ -105,7 +144,9 @@ final class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
         terminal.font = font
         style(terminal)
         terminal.optionAsMetaKey = true
+        terminal.changeScrollback(Self.scrollbackLines)
         container.addSubview(terminal)
+        applyRenderer(terminal)
         terminals[repo.id] = terminal
         repoByTerminal[ObjectIdentifier(terminal)] = repo.id
         start(terminal, in: repo.path)

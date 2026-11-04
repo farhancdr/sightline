@@ -229,6 +229,14 @@ enum DiffRows {
         return low
     }
 
+    /// The line number at `row`, else the closest row below, else above (fillers have none).
+    static func nearestNumber(to row: Int, in numbers: [Int?]) -> Int? {
+        guard !numbers.isEmpty else { return nil }
+        let start = min(max(0, row), numbers.count - 1)
+        if let below = numbers[start...].lazy.compactMap({ $0 }).first { return below }
+        return numbers[..<start].reversed().lazy.compactMap { $0 }.first
+    }
+
     /// File-line range covered by rows `first...last` (skipping fillers/separators).
     static func lineRange(rows: ClosedRange<Int>, numbers: [Int?]) -> ClosedRange<Int>? {
         let lines = rows.compactMap { numbers.indices.contains($0) ? numbers[$0] : nil }
@@ -459,6 +467,8 @@ protocol DiffHostView: NSView {
     func navigate(_ direction: Int)
     /// ⇧⌘C: copy "path:line(s)" for the caret / selection of the focused column.
     func copyReference()
+    /// Line in the current (new) file at the caret, for "Open in Editor".
+    func caretLine() -> Int?
 }
 
 extension DiffHostView {
@@ -560,6 +570,13 @@ final class SplitDiffView: NSView, DiffHostView {
         copy(lines: column.selectedLineRange())
     }
 
+    /// The new-file line on the caret's row (or the nearest row that has one), whichever side has focus.
+    func caretLine() -> Int? {
+        let column = window?.firstResponder === left.textView ? left : right
+        guard let row = column.selectedRows()?.lowerBound else { return nil }
+        return DiffRows.nearestNumber(to: row, in: right.side.numbers)
+    }
+
     @objc private func leftScrolled() { sync(from: left, to: right) }
     @objc private func rightScrolled() { sync(from: right, to: left) }
 
@@ -643,6 +660,11 @@ final class InlineDiffView: NSView, DiffHostView {
     }
 
     func copyReference() { copy(lines: column.selectedLineRange()) }
+
+    func caretLine() -> Int? {
+        guard let row = column.selectedRows()?.lowerBound else { return nil }
+        return DiffRows.nearestNumber(to: row, in: column.side.numbers)
+    }
 }
 
 enum DiffNavigation {

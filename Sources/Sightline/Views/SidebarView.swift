@@ -42,12 +42,17 @@ struct SidebarView: View {
                     ProgressView("Scanning…")
                 } else if store.repos.isEmpty, store.rootPath != nil {
                     ContentUnavailableView("No repos found", systemImage: "folder.badge.questionmark")
+                } else if store.filteredRepos.isEmpty, store.repoFilter.isEmpty, store.showOnlyChanged {
+                    ContentUnavailableView("No changes anywhere", systemImage: "checkmark.circle",
+                                           description: Text("Every repo is clean and pushed."))
                 } else if store.filteredRepos.isEmpty {
                     ContentUnavailableView.search(text: store.repoFilter)
                 }
             }
         }
         .background(Color.ghSidebar)
+        // Explicit border: the system split divider is invisible on the dark sidebar color.
+        .overlay(alignment: .trailing) { VerticalRule() }
         .onChange(of: store.focusRepoFilterRequest) {
             DispatchQueue.main.async { filterFocused = true }
         }
@@ -79,6 +84,16 @@ struct SidebarView: View {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(filterFocused ? Color.ghAccent : Color.ghBorder, lineWidth: filterFocused ? 1.5 : 1)
             )
+
+            Button { store.showOnlyChanged.toggle() } label: {
+                Image(systemName: store.showOnlyChanged
+                      ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(store.showOnlyChanged ? Color.ghAccent : Color.ghMuted)
+            }
+            .buttonStyle(.borderless)
+            .help(store.showOnlyChanged
+                  ? "Showing \(store.changedRepoCount) repos with changes or unpushed commits. Click to show all."
+                  : "Show only repos with changes or unpushed commits")
 
             Menu {
                 Picker("Sort Repos", selection: Binding(get: { store.repoSort }, set: { store.setRepoSort($0) })) {

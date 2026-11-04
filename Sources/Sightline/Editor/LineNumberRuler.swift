@@ -71,6 +71,12 @@ final class LineNumberRuler: NSRulerView {
         return low
     }
 
+    /// UTF-16 offset where 1-based `line` starts (clamped to the text).
+    func offset(ofLine line: Int) -> Int {
+        if needsIndex { rebuildIndex() }
+        return lineStarts[min(max(0, line - 1), lineStarts.count - 1)]
+    }
+
     /// 1-based inclusive line range of the current selection (caret line when nothing is selected).
     func selectedLines() -> ClosedRange<Int> {
         guard let textView else { return 1...1 }

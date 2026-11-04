@@ -28,10 +28,10 @@ struct ContentView: View {
                             }
                             VSplitView {
                                 Group {
-                                    if store.panel == .files {
-                                        FilePane(store: store)
-                                    } else {
-                                        DiffPane(store: store)
+                                    switch store.panel {
+                                    case .files, .search: FilePane(store: store)
+                                    case .changes: DiffPane(store: store)
+                                    case .history: CommitPane(store: store)
                                     }
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 120, idealHeight: 460, maxHeight: .infinity)
@@ -149,6 +149,13 @@ private struct FilePane: View {
                 Divider()
                 if store.showDiffForOpenFile, change != nil {
                     DiffPane(store: store, showsHeader: false)
+                } else if let controller = editor.controller, store.markdownPreview, store.isMarkdownOpen {
+                    // The preview replaces the editor (eye button / ⇧⌘V toggles back).
+                    MarkdownPreview(
+                        controller: controller,
+                        baseURL: URL(fileURLWithPath: (editor.path as NSString).deletingLastPathComponent, isDirectory: true),
+                        openLocalFile: { store.openLocalFile($0) }
+                    )
                 } else if let controller = editor.controller {
                     CodeEditorView(controller: controller)
                 } else {
@@ -186,6 +193,15 @@ private struct FilePane: View {
                     .controlSize(.small)
                     .help("Save (⌘S)")
             }
+            if store.isMarkdownOpen {
+                Button { store.toggleMarkdownPreview() } label: {
+                    Image(systemName: store.markdownPreview && !store.showDiffForOpenFile ? "eye.fill" : "eye")
+                        .foregroundStyle(store.markdownPreview && !store.showDiffForOpenFile ? Color.ghAccent : Color.ghMuted)
+                }
+                .buttonStyle(.borderless)
+                .help(store.markdownPreview && !store.showDiffForOpenFile ? "Show Source (⇧⌘V)" : "Open Preview (⇧⌘V)")
+            }
+            OpenInEditorButtons(store: store) { (editor.path, editor.controller?.caretLine()) }
             if change != nil {
                 Picker("", selection: Binding(
                     get: { store.showDiffForOpenFile },
@@ -242,59 +258,36 @@ private struct DiffPane: View {
                     .lineLimit(1)
                     .truncationMode(.head)
             }
-            if let diff = store.diff, diff.message == nil {
-                if diff.isTruncated {
-                    Button("Show full diff") { store.showFullDiff() }.controlSize(.small)
+            if showsHeader {
+                let isReviewed = store.isReviewed(file)
+                Button { store.toggleReviewed(file) } label: {
+                    Label(isReviewed ? "Reviewed" : "Mark Reviewed",
+                          systemImage: isReviewed ? "checkmark.square.fill" : "square")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(isReviewed ? Color.ghAdded : Color.ghMuted)
                 }
-                HStack(spacing: 6) {
-                    Text("+\(diff.additions)").foregroundStyle(Color.ghAdded)
-                    Text("−\(diff.deletions)").foregroundStyle(Color.ghDeleted)
-                }
-                .font(.caption.monospacedDigit().weight(.semibold))
-                HStack(spacing: 0) {
-                    ActionButton(symbol: "arrow.up", help: "Previous Change") { navigate(-1) }
-                    ActionButton(symbol: "arrow.down", help: "Next Change") { navigate(1) }
+                .buttonStyle(.borderless)
+                .help("Toggle reviewed (⌥⌘V). Marking moves to the next unreviewed file.")
+            }
+            if showsHeader {
+                OpenInEditorButtons(store: store) {
+                    store.diffAbsolutePath.map { ($0, DiffReference.activeHost?.caretLine()) }
                 }
             }
-            Picker("", selection: Binding(get: { store.diffSideBySide }, set: { store.setDiffSideBySide($0) })) {
-                Image(systemName: "rectangle.split.2x1").help("Side by Side").tag(true)
-                Image(systemName: "rectangle").help("Inline").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+            DiffControls(store: store, document: store.diff, nav: $nav, onShowFull: store.showFullDiff)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
     }
 
-    private func navigate(_ direction: Int) {
-        nav = DiffNavRequest(id: nav.id + 1, direction: direction)
-    }
-
-    @ViewBuilder
     private var content: some View {
-        if let diff = store.diff {
-            if let message = diff.message {
-                ContentUnavailableView(message, systemImage: "doc")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // New or deleted files have nothing to compare against: show one column, like VS Code.
-                let sideBySide = store.diffSideBySide && !diff.isOneSided
-                DiffContentView(
-                    document: diff,
-                    fileID: store.diffFileID ?? "",
-                    sideBySide: sideBySide,
-                    nav: nav,
-                    referencePath: store.diffReferencePath,
-                    onReferenceCopied: { store.showToast("Copied \($0)") }
-                )
-                .id(sideBySide) // different NSView per layout
-            }
-        } else if store.isLoadingDiff {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            Color.clear
-        }
+        DiffBody(
+            store: store,
+            document: store.diff,
+            isLoading: store.isLoadingDiff,
+            fileID: store.diffFileID ?? "",
+            referencePath: store.diffReferencePath,
+            nav: nav
+        )
     }
 }

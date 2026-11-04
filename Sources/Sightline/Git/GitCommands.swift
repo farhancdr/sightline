@@ -43,13 +43,96 @@ enum GitCommands {
         _ = try await Git.run(args, in: repo)
     }
 
+    /// Network commands get no TTY: make SSH fail fast on a passphrase prompt instead of hanging.
+    private static var networkEnv: [String: String] {
+        ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"] == nil ? ["GIT_SSH_COMMAND": "ssh -o BatchMode=yes"] : [:]
+    }
+
     static func fetch(_ repo: String) async throws {
-        var env: [String: String] = [:]
-        // No TTY for passphrase prompts: fail fast instead of hanging.
-        if ProcessInfo.processInfo.environment["GIT_SSH_COMMAND"] == nil {
-            env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+        _ = try await Git.run(["fetch", "--prune"], in: repo, extraEnv: networkEnv)
+    }
+
+    /// Fast-forward only: never creates a merge commit or rebases behind the user's back.
+    static func pull(_ repo: String) async throws {
+        _ = try await Git.run(["pull", "--ff-only"], in: repo, extraEnv: networkEnv)
+    }
+
+    /// Pushes the current branch. Without an upstream it publishes it (`-u <remote> HEAD`), using
+    /// `origin` if present, else the first remote. Never forces.
+    static func push(_ repo: String, hasUpstream: Bool) async throws {
+        if hasUpstream {
+            _ = try await Git.run(["push"], in: repo, extraEnv: networkEnv)
+            return
         }
-        _ = try await Git.run(["fetch", "--prune"], in: repo, extraEnv: env)
+        let remotes = try await Git.run(["remote"], in: repo).output
+            .split(separator: "\n").map(String.init)
+        guard let remote = remotes.first(where: { $0 == "origin" }) ?? remotes.first else {
+            throw GitError(command: "push", message: "This repository has no remote to push to.")
+        }
+        _ = try await Git.run(["push", "-u", remote, "HEAD"], in: repo, extraEnv: networkEnv)
+    }
+
+    // MARK: History
+
+    /// `%x1f` between fields, `%x1e` after each record: subjects/names can contain anything else.
+    static let logFormat = "%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%D%x1f%s%x1e"
+
+    static func log(_ repo: String, skip: Int = 0, limit: Int = 100, revision: String? = nil) async throws -> [CommitInfo] {
+        var args = ["log", "--format=\(logFormat)", "-n", "\(limit)", "--skip=\(skip)"]
+        if let revision { args.append(revision) }
+        let result = try await Git.run(args, in: repo)
+        return LogParser.parse(result.output)
+    }
+
+    static func commit(_ repo: String, sha: String) async throws -> CommitInfo? {
+        try await log(repo, limit: 1, revision: sha).first
+    }
+
+    /// Full commit message.
+    static func message(_ repo: String, sha: String) async throws -> String {
+        try await Git.run(["log", "-1", "--format=%B", sha], in: repo).output
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Commits on HEAD that aren't on its upstream (empty without an upstream).
+    static func unpushed(_ repo: String) async -> Set<String> {
+        guard let result = try? await Git.run(["rev-list", "@{upstream}..HEAD"], in: repo) else { return [] }
+        return Set(result.output.split(separator: "\n").map(String.init))
+    }
+
+    /// Files changed by a commit, relative to its first parent (the root commit: everything added).
+    static func commitFiles(_ repo: String, commit: CommitInfo) async throws -> [CommitFile] {
+        let args = commit.isRoot
+            ? ["diff-tree", "--root", "-r", "-M", "--no-commit-id", "--name-status", "-z", commit.sha]
+            : ["diff", "-M", "--name-status", "-z", "\(commit.sha)^", commit.sha]
+        return LogParser.parseNameStatus(try await Git.run(args, in: repo).output)
+    }
+
+    /// Whole-file diff of one file in a commit (first parent for merges).
+    static func commitDiff(_ repo: String, commit: CommitInfo, file: CommitFile) async throws -> String {
+        let context = "--unified=\(DiffDocument.fullContext)"
+        let paths = [file.originalPath, file.path].compactMap { $0 }
+        let args = commit.isRoot
+            ? ["show", "--root", "--format=", "--no-color", "--no-ext-diff", context, commit.sha, "--"] + paths
+            : ["diff", "-M", "--no-color", "--no-ext-diff", context, "\(commit.sha)^", commit.sha, "--"] + paths
+        return try await Git.run(args, in: repo).output
+    }
+
+    // MARK: Blame
+
+    /// Line-by-line authorship of `path`, computed against `contents` (the editor's current text) so
+    /// unsaved edits don't shift lines. Untracked files / repos without commits throw.
+    static func blame(_ repo: String, path: String, contents: String) async throws -> BlameResult {
+        let result = try await Git.run(
+            ["blame", "--porcelain", "--contents", "-", "--", path], in: repo, input: Data(contents.utf8)
+        )
+        return BlameParser.parse(result.output)
+    }
+
+    static func userEmail(_ repo: String) async -> String? {
+        let result = try? await Git.run(["config", "user.email"], in: repo, okCodes: [0, 1])
+        let email = result?.output.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return email.isEmpty ? nil : email
     }
 
     // MARK: Commit
@@ -144,14 +227,19 @@ enum StatusParser {
             case "#":
                 parseHeader(entry, into: &status)
             case "1":
+                // 1 XY sub mH mI mW hH hI path
                 let parts = entry.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: false)
-                if parts.count == 9 { addTracked(xy: parts[1], path: String(parts[8]), original: nil, to: &status) }
+                if parts.count == 9 {
+                    addTracked(xy: parts[1], path: String(parts[8]), original: nil, indexHash: String(parts[7]), to: &status)
+                }
             case "2":
                 // Rename/copy: the original path is the next NUL-separated field.
                 let parts = entry.split(separator: " ", maxSplits: 9, omittingEmptySubsequences: false)
                 let original = index < fields.count ? String(fields[index]) : nil
                 index += 1
-                if parts.count == 10 { addTracked(xy: parts[1], path: String(parts[9]), original: original, to: &status) }
+                if parts.count == 10 {
+                    addTracked(xy: parts[1], path: String(parts[9]), original: original, indexHash: String(parts[7]), to: &status)
+                }
             case "u":
                 let parts = entry.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: false)
                 if parts.count == 11 {
@@ -184,14 +272,102 @@ enum StatusParser {
         }
     }
 
-    private static func addTracked(xy: Substring, path: String, original: String?, to status: inout RepoStatus) {
+    private static func addTracked(
+        xy: Substring, path: String, original: String?, indexHash: String, to status: inout RepoStatus
+    ) {
         let chars = Array(xy)
         guard chars.count == 2 else { return }
         if chars[0] != "." {
-            status.files.append(FileChange(path: path, originalPath: original, area: .staged, code: chars[0]))
+            status.files.append(FileChange(path: path, originalPath: original, area: .staged, code: chars[0],
+                                           indexHash: indexHash))
         }
         if chars[1] != "." {
-            status.files.append(FileChange(path: path, originalPath: nil, area: .unstaged, code: chars[1]))
+            status.files.append(FileChange(path: path, originalPath: nil, area: .unstaged, code: chars[1],
+                                           indexHash: indexHash))
         }
+    }
+}
+
+/// Parsers for `git log` with record/field separators and `--name-status -z`.
+enum LogParser {
+    static func parse(_ output: String) -> [CommitInfo] {
+        output.split(separator: "\u{1e}").compactMap { record in
+            let fields = record.drop { $0.isNewline }.split(separator: "\u{1f}", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard fields.count >= 8 else { return nil }
+            return CommitInfo(
+                sha: fields[0],
+                shortSha: fields[1],
+                author: fields[2],
+                email: fields[3],
+                date: Date(timeIntervalSince1970: TimeInterval(fields[4]) ?? 0),
+                parents: fields[5].split(separator: " ").map(String.init),
+                refs: fields[6].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty },
+                subject: fields[7...].joined(separator: "\u{1f}")
+            )
+        }
+    }
+
+    /// `M\0path\0` or `R100\0old\0new\0`.
+    static func parseNameStatus(_ output: String) -> [CommitFile] {
+        let tokens = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        var files: [CommitFile] = []
+        var index = 0
+        while index < tokens.count {
+            let status = tokens[index]
+            index += 1
+            guard let code = status.first else { continue }
+            if code == "R" || code == "C" {
+                guard index + 1 < tokens.count else { break }
+                files.append(CommitFile(path: tokens[index + 1], originalPath: tokens[index], code: code))
+                index += 2
+            } else {
+                guard index < tokens.count else { break }
+                files.append(CommitFile(path: tokens[index], originalPath: nil, code: code))
+                index += 1
+            }
+        }
+        return files
+    }
+}
+
+/// Parser for `git blame --porcelain`. Commit details appear only the first time a sha shows up.
+enum BlameParser {
+    static func parse(_ output: String) -> BlameResult {
+        var lineCommits: [String] = []
+        var commits: [String: BlameCommit] = [:]
+        var current: String?
+        var fields: [String: String] = [:]
+
+        func finish() {
+            guard let sha = current, commits[sha] == nil else { return }
+            let mail = fields["author-mail"] ?? ""
+            commits[sha] = BlameCommit(
+                sha: sha,
+                author: fields["author"] ?? "",
+                email: mail.trimmingCharacters(in: CharacterSet(charactersIn: "<>")),
+                date: Date(timeIntervalSince1970: TimeInterval(fields["author-time"] ?? "") ?? 0),
+                summary: fields["summary"] ?? ""
+            )
+        }
+
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("\t") {
+                // Content line ends the entry for one final line.
+                finish()
+                if let sha = current { lineCommits.append(sha) }
+                fields = [:]
+                continue
+            }
+            let parts = line.split(separator: " ", maxSplits: 1)
+            guard let key = parts.first else { continue }
+            if key.count == 40, key.allSatisfy(\.isHexDigit), current == nil || fields.isEmpty {
+                current = String(key)
+            } else if parts.count == 2 {
+                fields[String(key)] = String(parts[1])
+            }
+        }
+        return BlameResult(lineCommits: lineCommits, commits: commits)
     }
 }

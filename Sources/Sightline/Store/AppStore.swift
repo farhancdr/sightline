@@ -13,6 +13,13 @@ final class AppStore {
     private static let repoSortKey = "repoSort"
     private static let lastOpenedKey = "repoLastOpened"
     private static let lastRepoKey = "lastRepoPath"
+    private static let onlyChangedKey = "showOnlyChangedRepos"
+    private static let editorKey = "preferredEditor"
+    private static let reviewedKey = "reviewedFiles"
+    private static let blameKey = "showLineBlame"
+    private static let terminalSchemeKey = "terminalColorScheme"
+    private static let markdownPreviewKey = "markdownPreview"
+    private static let terminalGPUKey = "terminalGPU"
     private static let maxParallelGit = 8
 
     // MARK: Workspace
@@ -21,7 +28,10 @@ final class AppStore {
     private(set) var repos: [Repo] = []
     private(set) var statuses: [String: RepoStatus] = [:]
     private(set) var isScanning = false
-    private(set) var isFetching = false
+
+    enum SyncOperation: String { case fetch = "Fetching", pull = "Pulling", push = "Pushing" }
+    /// The fetch/pull/push in flight for the selected repo (one at a time).
+    private(set) var syncing: SyncOperation?
     private(set) var selectedRepoID: String?
     var repoFilter = ""
 
@@ -29,6 +39,8 @@ final class AppStore {
     private(set) var repoSort: RepoSort
     /// When each repo (by path) was last opened from the sidebar / ⌘P, for "Recent".
     private(set) var lastOpened: [String: Double]
+    /// Sidebar shows only repos with uncommitted changes or unpushed commits (plus the selected one).
+    var showOnlyChanged: Bool { didSet { UserDefaults.standard.set(showOnlyChanged, forKey: Self.onlyChangedKey) } }
 
     // Layout toggles (⌘B / ⇧⌘B) and the ⌘T focus request.
     var sidebarVisible = true
@@ -48,23 +60,111 @@ final class AppStore {
     private(set) var isLoadingDiff = false
     var errorMessage: String?
 
+    // MARK: Workspace search (⇧⌘F)
+
+    var searchQuery = ""
+    var searchOptions = WorkspaceSearchOptions()
+    private(set) var searchResults = SearchResults()
+    private(set) var isSearching = false
+    private(set) var focusSearchRequest = 0
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var searchGeneration = 0
+
+    // MARK: Navigation history (⌥- / ⌥=)
+
+    struct NavLocation: Equatable {
+        let path: String
+        let line: Int
+        let column: Int
+    }
+
+    private(set) var backStack: [NavLocation] = []
+    private(set) var forwardStack: [NavLocation] = []
+    /// Applied when the file being opened finishes loading.
+    @ObservationIgnored private var pendingReveal: (path: String, line: Int, column: Int, length: Int)?
+
+    // MARK: History
+
+    private static let historyPage = 100
+    private(set) var commits: [CommitInfo] = []
+    /// Commits on HEAD not yet on its upstream.
+    private(set) var unpushedCommits: Set<String> = []
+    private(set) var hasMoreCommits = false
+    private(set) var isLoadingHistory = false
+    private(set) var selectedCommitID: String?
+    private(set) var selectedCommitMessage: String?
+    private(set) var commitFiles: [CommitFile] = []
+    private(set) var selectedCommitFileID: String?
+    private(set) var commitDiff: DiffDocument?
+    private(set) var isLoadingCommitDiff = false
+    /// A commit opened from blame that isn't in the loaded pages.
+    @ObservationIgnored private var extraCommit: CommitInfo?
+    /// "repo|HEAD" the loaded history belongs to; a new HEAD (commit/pull/switch) reloads it.
+    @ObservationIgnored private var historyKey: String?
+    @ObservationIgnored private var historyTask: Task<Void, Never>?
+    @ObservationIgnored private var commitTask: Task<Void, Never>?
+    @ObservationIgnored private var commitDiffTask: Task<Void, Never>?
+
+    // MARK: Review marks
+
+    /// repo path → file id → fingerprint recorded when it was marked reviewed.
+    private(set) var reviewed: [String: [String: String]]
+    /// repo path → file id → current fingerprint, recomputed on every refresh (even when the status
+    /// itself didn't change), so an agent editing a reviewed file un-reviews it.
+    private(set) var currentFingerprints: [String: [String: String]] = [:]
+
     // MARK: Files / editor
 
-    enum Panel: String, CaseIterable { case changes = "Changes", files = "Files" }
-    var panel: Panel = .changes
+    enum Panel: String, CaseIterable {
+        case changes = "Changes", files = "Files", history = "History", search = "Search"
+    }
+    var panel: Panel = .changes {
+        didSet { if panel == .history { loadHistoryIfNeeded() } }
+    }
     private(set) var explorer: ExplorerModel?
     private(set) var editor: EditorSession?
     /// In the Files panel, show the diff of the open file instead of the editor.
     var showDiffForOpenFile = false
+    /// Rendered markdown in place of the editor for markdown files (⇧⌘V).
+    var markdownPreview: Bool { didSet { UserDefaults.standard.set(markdownPreview, forKey: Self.markdownPreviewKey) } }
+    var isMarkdownOpen: Bool { editor?.language.mode == .markdown && editor?.controller != nil }
+    /// GitLens-style "author, when · subject" after the caret line in the editor.
+    var showLineBlame: Bool {
+        didSet {
+            UserDefaults.standard.set(showLineBlame, forKey: Self.blameKey)
+            editor?.controller?.blameEnabled = showLineBlame
+        }
+    }
     /// Short confirmation shown in the file header ("Copied path:12-30").
     private(set) var toast: String?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+
+    // MARK: External editor
+
+    /// Editors found on this Mac (checked once at launch).
+    @ObservationIgnored let installedEditors = ExternalEditor.installed
+    private(set) var preferredEditorID: String?
+    var preferredEditor: ExternalEditor? {
+        installedEditors.first { $0.id == preferredEditorID } ?? installedEditors.first
+    }
 
     // MARK: Chrome
 
     enum Theme: String, CaseIterable { case system = "System", light = "Light", dark = "Dark" }
     private(set) var theme: Theme
     var terminalVisible: Bool { didSet { UserDefaults.standard.set(terminalVisible, forKey: Self.terminalKey) } }
+    var terminalColorScheme: TerminalManager.ColorScheme {
+        didSet {
+            UserDefaults.standard.set(terminalColorScheme.rawValue, forKey: Self.terminalSchemeKey)
+            TerminalManager.shared.colorScheme = terminalColorScheme
+        }
+    }
+    var terminalGPU: Bool {
+        didSet {
+            UserDefaults.standard.set(terminalGPU, forKey: Self.terminalGPUKey)
+            TerminalManager.shared.useGPU = terminalGPU
+        }
+    }
 
     // MARK: Quick open
 
@@ -94,6 +194,17 @@ final class AppStore {
         diffSideBySide = UserDefaults.standard.object(forKey: Self.diffLayoutKey) as? Bool ?? true
         repoSort = RepoSort(rawValue: UserDefaults.standard.string(forKey: Self.repoSortKey) ?? "") ?? .folder
         lastOpened = UserDefaults.standard.dictionary(forKey: Self.lastOpenedKey) as? [String: Double] ?? [:]
+        showOnlyChanged = UserDefaults.standard.bool(forKey: Self.onlyChangedKey)
+        preferredEditorID = UserDefaults.standard.string(forKey: Self.editorKey)
+        reviewed = UserDefaults.standard.dictionary(forKey: Self.reviewedKey) as? [String: [String: String]] ?? [:]
+        showLineBlame = UserDefaults.standard.object(forKey: Self.blameKey) as? Bool ?? true
+        markdownPreview = UserDefaults.standard.bool(forKey: Self.markdownPreviewKey)
+        terminalColorScheme = TerminalManager.ColorScheme(
+            rawValue: UserDefaults.standard.string(forKey: Self.terminalSchemeKey) ?? ""
+        ) ?? .dark
+        terminalGPU = UserDefaults.standard.object(forKey: Self.terminalGPUKey) as? Bool ?? true
+        TerminalManager.shared.colorScheme = terminalColorScheme
+        TerminalManager.shared.useGPU = terminalGPU
         if let saved = UserDefaults.standard.string(forKey: Self.rootKey),
            FileManager.default.fileExists(atPath: saved) {
             Task { await open(root: saved) }
@@ -107,13 +218,20 @@ final class AppStore {
     var selectedFile: FileChange? { selectedStatus?.files.first { $0.id == selectedFileID } }
 
     var filteredRepos: [Repo] {
+        var result = repos
+        if showOnlyChanged {
+            // Keep the selected repo, or committing its last change would yank the row away.
+            result = result.filter { $0.id == selectedRepoID || (statuses[$0.id]?.needsAttention ?? false) }
+        }
         let query = repoFilter.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return repos }
-        return repos.filter {
+        guard !query.isEmpty else { return result }
+        return result.filter {
             $0.relativePath.localizedCaseInsensitiveContains(query)
                 || (statuses[$0.id]?.branch?.localizedCaseInsensitiveContains(query) ?? false)
         }
     }
+
+    var changedRepoCount: Int { repos.filter { statuses[$0.id]?.needsAttention ?? false }.count }
 
     /// Path relative to the workspace root (what "Copy Relative Path" puts on the clipboard).
     func rootRelativePath(repo: Repo, repoRelativePath: String) -> String {
@@ -177,6 +295,7 @@ final class AppStore {
         fileTask?.cancel()
         editor = nil
         showDiffForOpenFile = false
+        resetHistory()
         guard let repo = selectedRepo else {
             explorer = nil
             return
@@ -184,6 +303,7 @@ final class AppStore {
         let model = explorers[repo.id] ?? ExplorerModel(repo: repo)
         explorers[repo.id] = model
         explorer = model
+        if panel == .history { loadHistoryIfNeeded() }
         if let path = model.selectedPath, FileManager.default.fileExists(atPath: path),
            !((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? true) {
             openFile(path)
@@ -253,7 +373,289 @@ final class AppStore {
             }
         } while refreshAgain.contains(repoID)
 
-        if repoID == selectedRepoID { reconcileSelectedFile() }
+        if let status = statuses[repoID] {
+            let fingerprints = await Task.detached(priority: .utility) {
+                ReviewState.fingerprints(status, repoPath: repoID)
+            }.value
+            if currentFingerprints[repoID] != fingerprints { currentFingerprints[repoID] = fingerprints }
+            pruneReviewed(repoID: repoID, keeping: Set(status.files.map(\.id)))
+        }
+        if repoID == selectedRepoID {
+            reconcileSelectedFile()
+            if panel == .history { loadHistoryIfNeeded() }
+        }
+    }
+
+    // MARK: History
+
+    var selectedCommit: CommitInfo? {
+        commits.first { $0.sha == selectedCommitID } ?? (extraCommit?.sha == selectedCommitID ? extraCommit : nil)
+    }
+
+    var selectedCommitFile: CommitFile? { commitFiles.first { $0.id == selectedCommitFileID } }
+
+    /// Changes when HEAD moves (commit/pull/switch) and when the unpushed set changes (push/fetch).
+    private var currentHistoryKey: String? {
+        selectedRepo.map {
+            "\($0.id)|\(selectedStatus?.oid ?? "")|\(selectedStatus?.upstream ?? "")|\(selectedStatus?.ahead ?? 0)"
+        }
+    }
+
+    func loadHistoryIfNeeded() {
+        guard let key = currentHistoryKey, key != historyKey else { return }
+        loadHistory(reset: true)
+    }
+
+    func loadMoreHistory() {
+        guard hasMoreCommits, !isLoadingHistory else { return }
+        loadHistory(reset: false)
+    }
+
+    private func loadHistory(reset: Bool) {
+        guard let repo = selectedRepo else { return }
+        let key = currentHistoryKey
+        let skip = reset ? 0 : commits.count
+        isLoadingHistory = true
+        historyTask?.cancel()
+        historyTask = Task {
+            let page: [CommitInfo]
+            do {
+                page = try await GitCommands.log(repo.path, skip: skip, limit: Self.historyPage)
+            } catch {
+                page = [] // no commits yet, or not a repo anymore
+            }
+            let unpushed = await GitCommands.unpushed(repo.path)
+            guard !Task.isCancelled, selectedRepoID == repo.id else { return }
+            commits = reset ? page : commits + page
+            hasMoreCommits = page.count == Self.historyPage
+            unpushedCommits = unpushed
+            historyKey = key
+            isLoadingHistory = false
+            if reset, selectedCommit == nil || !commits.contains(where: { $0.sha == selectedCommitID }) {
+                if extraCommit?.sha != selectedCommitID || selectedCommitID == nil { selectCommit(commits.first?.sha) }
+            }
+        }
+    }
+
+    private func resetHistory() {
+        historyTask?.cancel()
+        commitTask?.cancel()
+        commitDiffTask?.cancel()
+        commits = []
+        unpushedCommits = []
+        hasMoreCommits = false
+        isLoadingHistory = false
+        historyKey = nil
+        extraCommit = nil
+        selectedCommitID = nil
+        selectedCommitMessage = nil
+        commitFiles = []
+        selectedCommitFileID = nil
+        commitDiff = nil
+    }
+
+    func selectCommit(_ sha: String?) {
+        guard sha != selectedCommitID || commitFiles.isEmpty else { return }
+        selectedCommitID = sha
+        selectedCommitMessage = nil
+        commitFiles = []
+        selectedCommitFileID = nil
+        commitDiff = nil
+        commitTask?.cancel()
+        guard let repo = selectedRepo, let commit = selectedCommit else { return }
+        commitTask = Task {
+            let files = (try? await GitCommands.commitFiles(repo.path, commit: commit)) ?? []
+            let message = try? await GitCommands.message(repo.path, sha: commit.sha)
+            guard !Task.isCancelled, selectedCommitID == commit.sha else { return }
+            commitFiles = files
+            selectedCommitMessage = message
+            selectCommitFile(files.first?.id)
+        }
+    }
+
+    func selectCommitFile(_ id: String?) {
+        if id != selectedCommitFileID { commitDiff = nil }
+        selectedCommitFileID = id
+        commitDiffTask?.cancel()
+        guard let repo = selectedRepo, let commit = selectedCommit, let file = selectedCommitFile else {
+            commitDiff = nil
+            return
+        }
+        isLoadingCommitDiff = commitDiff == nil
+        commitDiffTask = Task {
+            defer { if !Task.isCancelled { isLoadingCommitDiff = false } }
+            let document: DiffDocument
+            do {
+                let raw = try await GitCommands.commitDiff(repo.path, commit: commit, file: file)
+                document = await Task.detached {
+                    DiffDocument.build(from: raw, path: file.path, rowLimit: DiffDocument.defaultRowLimit)
+                }.value
+            } catch {
+                document = .message(error.localizedDescription)
+            }
+            guard !Task.isCancelled, selectedCommitID == commit.sha, selectedCommitFileID == file.id else { return }
+            commitDiff = document
+        }
+    }
+
+    /// Opens a commit in the History panel (e.g. from a blame annotation), loading it if needed.
+    func showCommit(_ sha: String) {
+        repoPanelVisible = true
+        panel = .history
+        if commits.contains(where: { $0.sha == sha }) {
+            selectCommit(sha)
+            return
+        }
+        guard let repo = selectedRepo else { return }
+        Task {
+            guard let commit = try? await GitCommands.commit(repo.path, sha: sha), selectedRepoID == repo.id else { return }
+            extraCommit = commit
+            selectedCommitID = nil
+            selectCommit(commit.sha)
+        }
+    }
+
+    func copyToClipboard(_ text: String, toast: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        showToast(toast)
+    }
+
+    // MARK: Search
+
+    func showSearch() {
+        repoPanelVisible = true
+        panel = .search
+        focusSearchRequest += 1
+    }
+
+    /// Live search: debounced, and results from an older query are dropped.
+    func scheduleSearch(immediately: Bool = false) {
+        searchTask?.cancel()
+        searchGeneration += 1
+        let generation = searchGeneration
+        let query = searchQuery
+        let options = searchOptions
+        guard !query.isEmpty, let rootPath else {
+            searchResults = SearchResults()
+            isSearching = false
+            return
+        }
+        let repos = repos
+        isSearching = true
+        searchTask = Task {
+            if !immediately { try? await Task.sleep(for: .milliseconds(350)) }
+            guard !Task.isCancelled, generation == searchGeneration else { return }
+            let results = await WorkspaceSearch.search(query, options: options, repos: repos, root: rootPath)
+            guard generation == searchGeneration else { return }
+            searchResults = results
+            isSearching = false
+        }
+    }
+
+    func openSearchMatch(_ match: SearchMatch) {
+        open(path: match.absolutePath, line: match.line, column: match.column,
+             length: match.ranges.first?.length ?? 0, record: true)
+    }
+
+    // MARK: Open at a location
+
+    /// Opens `path` (any repo) and reveals line/column, selecting `length` characters.
+    func open(path: String, line: Int, column: Int = 1, length: Int = 0, record: Bool) {
+        guard let repo = reposByDepth.first(where: { path.hasPrefix($0.path + "/") }) else { return }
+        if record { recordJump() }
+        if let controller = editor?.controller, editor?.path == path {
+            controller.reveal(line: line, column: column, length: length)
+            if panel != .search { panel = .files }
+            return
+        }
+        if repo.id != selectedRepoID {
+            guard confirmLeavingEditor() else { return }
+            editor = nil // already confirmed
+            selectRepo(repo.id)
+            guard selectedRepoID == repo.id else { return }
+        }
+        pendingReveal = (path, line, column, length)
+        openInEditor(repoRelativePath: String(path.dropFirst(repo.path.count + 1)))
+    }
+
+    // MARK: Navigation history
+
+    private var currentLocation: NavLocation? {
+        guard let editor, let controller = editor.controller else { return nil }
+        return NavLocation(path: editor.path, line: controller.caretLine() ?? 1, column: controller.caretColumn())
+    }
+
+    /// Remembers where the caret is before a jump (search result, ⌘P, explorer…).
+    func recordJump() {
+        guard let location = currentLocation else { return }
+        if backStack.last != location { backStack.append(location) }
+        if backStack.count > 100 { backStack.removeFirst(backStack.count - 100) }
+        forwardStack.removeAll()
+    }
+
+    /// ⌥-
+    func navigateBack() {
+        guard let target = backStack.popLast() else { return NSSound.beep() }
+        if let location = currentLocation { forwardStack.append(location) }
+        open(path: target.path, line: target.line, column: target.column, record: false)
+    }
+
+    /// ⌥=
+    func navigateForward() {
+        guard let target = forwardStack.popLast() else { return NSSound.beep() }
+        if let location = currentLocation { backStack.append(location) }
+        open(path: target.path, line: target.line, column: target.column, record: false)
+    }
+
+    // MARK: Review marks
+
+    func isReviewed(_ file: FileChange) -> Bool {
+        guard let repoID = selectedRepoID, let marked = reviewed[repoID]?[file.id] else { return false }
+        return marked == currentFingerprints[repoID]?[file.id]
+    }
+
+    func reviewedCount(_ files: [FileChange]) -> Int { files.filter(isReviewed).count }
+
+    /// Marks / unmarks a file. Marking the selected file moves on to the next unreviewed one.
+    func toggleReviewed(_ file: FileChange) {
+        guard let repo = selectedRepo else { return }
+        if isReviewed(file) {
+            reviewed[repo.id]?[file.id] = nil
+        } else {
+            let fingerprint = currentFingerprints[repo.id]?[file.id] ?? ReviewState.fingerprint(file, repoPath: repo.id)
+            reviewed[repo.id, default: [:]][file.id] = fingerprint
+            if currentFingerprints[repo.id]?[file.id] == nil { currentFingerprints[repo.id, default: [:]][file.id] = fingerprint }
+            // Only in Changes: in the Files panel's Diff view the editor header would show another file.
+            if panel == .changes, file.id == selectedFileID, let next = nextUnreviewed(after: file) {
+                selectedFileID = next.id
+            }
+        }
+        saveReviewed()
+    }
+
+    /// ⌥⌘V
+    func toggleReviewedForSelected() {
+        if let file = selectedFile { toggleReviewed(file) }
+    }
+
+    private func nextUnreviewed(after file: FileChange) -> FileChange? {
+        guard let status = selectedStatus else { return nil }
+        let ordered = ChangeArea.sections.flatMap { status.sectionFiles($0) }
+        guard let index = ordered.firstIndex(of: file) else { return nil }
+        return (ordered[(index + 1)...] + ordered[..<index]).first { !isReviewed($0) }
+    }
+
+    private func pruneReviewed(repoID: String, keeping ids: Set<String>) {
+        guard let marks = reviewed[repoID] else { return }
+        let kept = marks.filter { ids.contains($0.key) }
+        guard kept.count != marks.count else { return }
+        reviewed[repoID] = kept.isEmpty ? nil : kept
+        saveReviewed()
+    }
+
+    private func saveReviewed() {
+        UserDefaults.standard.set(reviewed, forKey: Self.reviewedKey)
     }
 
     private func reconcileSelectedFile() {
@@ -357,6 +759,7 @@ final class AppStore {
             return
         }
         guard confirmLeavingEditor() else { return }
+        recordJump()
         explorer.selectedPath = path
         showDiffForOpenFile = false
         openFile(path)
@@ -370,7 +773,7 @@ final class AppStore {
             guard confirmLeavingEditor() else { return }
             openFile(path)
         }
-        panel = .files
+        if panel != .search { panel = .files } // search results stay visible while browsing matches
         showDiffForOpenFile = false
         explorer.reveal(relativePath: repoRelativePath)
     }
@@ -389,12 +792,28 @@ final class AppStore {
         fileTask = Task {
             let content = await Task.detached(priority: .userInitiated) { FileContent.load(path: path) }.value
             guard !Task.isCancelled else { return }
-            editor = EditorSession(
+            let session = EditorSession(
                 content: content,
                 referencePath: workspaceRelative(path),
                 onReferenceCopied: { [weak self] in self?.showToast("Copied \($0)") }
             )
+            if let controller = session.controller,
+               let repo = reposByDepth.first(where: { path.hasPrefix($0.path + "/") }) {
+                controller.blameEnabled = showLineBlame
+                controller.blameContext = EditorController.BlameContext(
+                    repoPath: repo.path,
+                    relativePath: String(path.dropFirst(repo.path.count + 1)),
+                    openCommit: { [weak self] sha in self?.showCommit(sha) }
+                )
+            }
+            editor = session
             noteRecent(path)
+            if let reveal = pendingReveal, reveal.path == path, let controller = session.controller {
+                pendingReveal = nil
+                DispatchQueue.main.async {
+                    controller.reveal(line: reveal.line, column: reveal.column, length: reveal.length)
+                }
+            }
         }
     }
 
@@ -416,10 +835,36 @@ final class AppStore {
         }
     }
 
+    /// Absolute path of the file shown in the diff view (working-tree change, or a commit's file).
+    var diffAbsolutePath: String? {
+        guard let repo = selectedRepo else { return nil }
+        if panel == .history { return selectedCommitFile.map { repo.path + "/" + $0.path } }
+        return selectedFile.map { repo.path + "/" + $0.path }
+    }
+
+    /// ⇧⌘V: toggles between source and preview (switching to the file view if the diff was showing).
+    func toggleMarkdownPreview() {
+        guard isMarkdownOpen else { return }
+        if showDiffForOpenFile {
+            showDiffForOpenFile = false
+            markdownPreview = true
+        } else {
+            markdownPreview.toggle()
+        }
+    }
+
+    /// A file link clicked in the markdown preview: open it here when it's inside the selected repo.
+    func openLocalFile(_ url: URL) -> Bool {
+        guard let repo = selectedRepo else { return false }
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(repo.path + "/"), FileManager.default.fileExists(atPath: path) else { return false }
+        openInEditor(repoRelativePath: String(path.dropFirst(repo.path.count + 1)))
+        return true
+    }
+
     /// Workspace-root-relative path of the change shown in the diff view.
     var diffReferencePath: String {
-        guard let repo = selectedRepo, let file = selectedFile else { return "" }
-        return workspaceRelative(repo.path + "/" + file.path)
+        diffAbsolutePath.map(workspaceRelative) ?? ""
     }
 
     func showToast(_ text: String) {
@@ -576,16 +1021,29 @@ final class AppStore {
         editor?.reloadFromDiskIfClean()
     }
 
-    func fetchSelected() async {
-        guard let repo = selectedRepo, !isFetching else { return }
-        isFetching = true
-        defer { isFetching = false }
+    func fetchSelected() async { await sync(.fetch) }
+
+    func sync(_ operation: SyncOperation) async {
+        guard let repo = selectedRepo, syncing == nil else { return }
+        let hasUpstream = statuses[repo.id]?.upstream != nil
+        syncing = operation
+        defer { syncing = nil }
         do {
-            try await GitCommands.fetch(repo.path)
+            switch operation {
+            case .fetch: try await GitCommands.fetch(repo.path)
+            case .pull: try await GitCommands.pull(repo.path)
+            case .push: try await GitCommands.push(repo.path, hasUpstream: hasUpstream)
+            }
+            if operation != .fetch { showToast(operation == .pull ? "Pulled" : "Pushed") }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "\(operation == .push ? "Push" : operation == .pull ? "Pull" : "Fetch") failed:\n"
+                + String(error.localizedDescription.suffix(4000))
         }
         await refresh(repo.id)
+        if operation == .pull {
+            explorers[repo.id]?.reload()
+            editor?.reloadFromDiskIfClean()
+        }
     }
 
     // MARK: Quick open
@@ -610,6 +1068,7 @@ final class AppStore {
 
     func openQuickOpenEntry(_ entry: QuickOpenEntry) {
         quickOpenVisible = false
+        recordJump()
         if entry.repoID != selectedRepoID {
             guard confirmLeavingEditor() else { return }
             // Discard check already done; don't ask twice.
@@ -626,6 +1085,56 @@ final class AppStore {
         recentFiles.removeAll { $0.id == entry.id }
         recentFiles.insert(entry, at: 0)
         if recentFiles.count > 15 { recentFiles.removeLast() }
+    }
+
+    // MARK: Open in editor / Finder
+
+    func setPreferredEditor(_ editor: ExternalEditor) {
+        preferredEditorID = editor.id
+        UserDefaults.standard.set(editor.id, forKey: Self.editorKey)
+    }
+
+    func openExternally(path: String, line: Int? = nil, editor: ExternalEditor? = nil) {
+        guard let target = editor ?? preferredEditor else {
+            errorMessage = "No supported code editor found (VS Code, Cursor, Windsurf, Zed, Sublime Text, Xcode)."
+            return
+        }
+        if let editor { setPreferredEditor(editor) }
+        target.open(path: path, line: line)
+    }
+
+    func revealInFinder(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    /// The file (and caret line) the user is looking at: focused editor, focused diff, then the
+    /// open file or selected change.
+    func focusedLocation() -> (path: String, line: Int?)? {
+        let responder = NSApp.keyWindow?.firstResponder
+        if let editor, let controller = editor.controller, responder === controller.textView {
+            return (editor.path, controller.caretLine())
+        }
+        if let host = DiffReference.activeHost, host.window != nil, let path = diffAbsolutePath {
+            return (path, host.caretLine())
+        }
+        if panel == .files, let editor { return (editor.path, editor.controller?.caretLine()) }
+        if let path = diffAbsolutePath { return (path, nil) }
+        return nil
+    }
+
+    /// ⇧⌘E
+    func openFocusedExternally() {
+        guard let location = focusedLocation() else { return }
+        openExternally(path: location.path, line: location.line)
+    }
+
+    /// ⌥⌘R
+    func revealFocusedInFinder() {
+        if let location = focusedLocation() {
+            revealInFinder(location.path)
+        } else if let repo = selectedRepo {
+            revealInFinder(repo.path)
+        }
     }
 
     // MARK: Theme / terminal

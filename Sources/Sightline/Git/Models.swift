@@ -44,6 +44,8 @@ struct FileChange: Identifiable, Hashable, Sendable {
     let area: ChangeArea
     /// Porcelain status letter: M A D R C T U ?
     let code: Character
+    /// Index blob id from porcelain v2 (`hI`), for tracked entries. Used to fingerprint staged content.
+    var indexHash: String?
 
     var id: String { "\(area.rawValue):\(path)" }
     var fileName: String { (path as NSString).lastPathComponent }
@@ -68,6 +70,9 @@ struct RepoStatus: Sendable, Equatable {
         return "no commits"
     }
 
+    /// Uncommitted changes or unpushed commits.
+    var needsAttention: Bool { !files.isEmpty || ahead > 0 }
+
     /// Distinct paths with any change (a file can be both staged and unstaged).
     var changedCount: Int { Set(files.map(\.path)).count }
 
@@ -90,4 +95,56 @@ struct BranchInfo: Identifiable, Hashable, Sendable {
     let relativeDate: String
 
     var id: String { (isRemote ? "r:" : "l:") + name }
+}
+
+struct CommitInfo: Identifiable, Hashable, Sendable {
+    let sha: String
+    let shortSha: String
+    let author: String
+    let email: String
+    let date: Date
+    let parents: [String]
+    /// Decorations from `%D`, e.g. "HEAD -> main, origin/main, tag: v1.0".
+    let refs: [String]
+    let subject: String
+
+    var id: String { sha }
+    var isMerge: Bool { parents.count > 1 }
+    var isRoot: Bool { parents.isEmpty }
+}
+
+struct CommitFile: Identifiable, Hashable, Sendable {
+    let path: String
+    let originalPath: String?
+    /// A M D R C T
+    let code: Character
+
+    var id: String { path }
+    var fileName: String { (path as NSString).lastPathComponent }
+    var directory: String {
+        let dir = (path as NSString).deletingLastPathComponent
+        return dir.isEmpty ? "" : dir + "/"
+    }
+}
+
+struct BlameCommit: Sendable, Equatable {
+    let sha: String
+    let author: String
+    let email: String
+    let date: Date
+    let summary: String
+
+    /// All-zero sha: lines changed in the working tree / editor buffer.
+    var isUncommitted: Bool { sha.allSatisfy { $0 == "0" } }
+}
+
+struct BlameResult: Sendable, Equatable {
+    /// Commit sha for each line (index = 0-based line number).
+    let lineCommits: [String]
+    let commits: [String: BlameCommit]
+
+    func commit(forLine line: Int) -> BlameCommit? {
+        guard lineCommits.indices.contains(line) else { return nil }
+        return commits[lineCommits[line]]
+    }
 }
