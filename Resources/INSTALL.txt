@@ -1,0 +1,35 @@
+Sightline: install
+==================
+
+1. Open the DMG and drag Sightline into the Applications folder.
+
+2. First launch. Sightline isn't notarized by Apple yet, so macOS blocks it
+   the first time. Do ONE of these, once:
+
+   a) Open Sightline from Applications. When macOS says it can't verify the
+      app, click "Done", then open System Settings > Privacy & Security,
+      scroll down and click "Open Anyway" next to Sightline, and confirm.
+
+   b) Or run this in Terminal:
+        xattr -dr com.apple.quarantine /Applications/Sightline.app
+
+3. On first launch, choose your workspace root: the folder that contains
+   your repos. Sightline finds every nested git repo under it.
+
+Requirements: macOS 14 (Sonoma) or later. Runs on Apple Silicon and Intel.
+
+Shortcuts
+---------
+  Cmd P          Go to file (all repos)
+  Cmd T          Find repo
+  Cmd B          Toggle repo sidebar
+  Shift Cmd B    Toggle Changes/Files panel
+  Cmd J          Toggle terminal
+  Option J       Relaunch the repo's terminal
+  Ctrl `         Focus terminal
+  Cmd S          Save file
+  Cmd F          Find in file
+  Shift Cmd C    Copy path:line (or path:from-to) for AI agents
+  Cmd Return     Commit
+  Shift Cmd T    Cycle theme (System / Light / Dark)
+  Cmd R          Refresh all repos

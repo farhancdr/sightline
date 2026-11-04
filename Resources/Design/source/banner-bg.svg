@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"></stop><stop offset="1" stop-color="#F0F6FA"></stop></linearGradient>
+<radialGradient id="r1" cx="1180" cy="40" r="620" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#58C0ED" stop-opacity=".20"></stop><stop offset="1" stop-color="#58C0ED" stop-opacity="0"></stop></radialGradient></defs>
+<rect width="1280" height="640" fill="url(#bg)"></rect><rect width="1280" height="640" fill="url(#r1)"></rect>
+<text x="500" y="330" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="112" font-weight="700" letter-spacing="-3" fill="#1F2328">Sight<tspan fill="#2A639B">line</tspan></text>
+<text x="504" y="396" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="34" fill="#59636E">Review AI agent changes across every repo</text></svg>
