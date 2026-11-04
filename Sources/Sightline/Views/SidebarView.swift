@@ -121,30 +121,32 @@ struct SidebarView: View {
 }
 
 private struct RepoRow: View {
+    @Environment(\.backgroundProminence) private var prominence
     let repo: Repo
     let status: RepoStatus?
     var showFullPath = false
 
     var body: some View {
+        let selected = prominence == .increased
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(showFullPath && !repo.relativePath.isEmpty ? repo.relativePath : repo.name)
-                    .foregroundStyle(Color.ghText)
+                    .foregroundStyle(Color.ghText.onSelection(selected))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let status {
                     Text(status.headLabel)
                         .font(.caption)
-                        .foregroundStyle(status.isDetached ? Color.ghConflict : Color.ghMuted)
+                        .foregroundStyle((status.isDetached ? Color.ghConflict : Color.ghMuted).onSelection(selected, opacity: 0.85))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
             }
             Spacer(minLength: 4)
             if let status {
-                if status.behind > 0 { Badge(text: "↓\(status.behind)", color: .ghModified) }
-                if status.ahead > 0 { Badge(text: "↑\(status.ahead)", color: .ghAccent) }
-                if status.changedCount > 0 { Badge(text: "\(status.changedCount)", color: .ghMuted) }
+                if status.behind > 0 { Badge(text: "↓\(status.behind)", color: Color.ghModified.onSelection(selected)) }
+                if status.ahead > 0 { Badge(text: "↑\(status.ahead)", color: Color.ghAccent.onSelection(selected)) }
+                if status.changedCount > 0 { Badge(text: "\(status.changedCount)", color: Color.ghMuted.onSelection(selected)) }
             }
         }
         .padding(.vertical, 1)

@@ -54,14 +54,16 @@ struct HistoryList: View {
 }
 
 private struct CommitRow: View {
+    @Environment(\.backgroundProminence) private var prominence
     let commit: CommitInfo
     let isUnpushed: Bool
 
     var body: some View {
+        let selected = prominence == .increased
         VStack(alignment: .leading, spacing: 3) {
             Text(commit.subject)
                 .lineLimit(2)
-                .foregroundStyle(Color.ghText)
+                .foregroundStyle(Color.ghText.onSelection(selected))
             HStack(spacing: 5) {
                 Text(commit.author).lineLimit(1)
                 Text("·")
@@ -70,15 +72,15 @@ private struct CommitRow: View {
                 if isUnpushed {
                     Text("↑ unpushed")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color.ghAccent)
+                        .foregroundStyle(Color.ghAccent.onSelection(selected))
                         .help("Not on the upstream branch yet")
                 }
                 Text(commit.shortSha).font(.caption.monospaced())
             }
             .font(.caption)
-            .foregroundStyle(Color.ghMuted)
+            .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.85))
             if !commit.refs.isEmpty {
-                RefLabels(refs: commit.refs)
+                RefLabels(refs: commit.refs, onSelection: selected)
             }
         }
         .padding(.vertical, 3)
@@ -89,6 +91,7 @@ private struct CommitRow: View {
 /// "HEAD -> main", "origin/main", "tag: v1" as small capsules.
 private struct RefLabels: View {
     let refs: [String]
+    var onSelection = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -98,8 +101,8 @@ private struct RefLabels: View {
                     .lineLimit(1)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(color(ref).opacity(0.14), in: Capsule())
-                    .foregroundStyle(color(ref))
+                    .background(color(ref).onSelection(onSelection).opacity(onSelection ? 0.22 : 0.14), in: Capsule())
+                    .foregroundStyle(color(ref).onSelection(onSelection))
             }
         }
     }
@@ -230,29 +233,41 @@ private struct CommitFileList: View {
     var body: some View {
         List(selection: Binding(get: { store.selectedCommitFileID }, set: { store.selectCommitFile($0) })) {
             ForEach(store.commitFiles) { file in
-                HStack(spacing: 6) {
-                    Image(systemName: FileIcon.symbol(for: file.fileName))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(file.fileName).lineLimit(1).strikethrough(file.code == "D")
-                        Text(file.originalPath.map { "← \($0)" } ?? file.directory)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                    }
-                    Spacer(minLength: 4)
-                    Text(String(file.code))
-                        .font(.caption.monospaced().weight(.bold))
-                        .foregroundStyle(Color.ghStatus(file.code) ?? .ghModified)
-                }
-                .tag(file.id)
-                .help(file.path)
+                CommitFileRow(file: file).tag(file.id)
             }
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
+    }
+}
+
+private struct CommitFileRow: View {
+    @Environment(\.backgroundProminence) private var prominence
+    let file: CommitFile
+
+    var body: some View {
+        let selected = prominence == .increased
+        HStack(spacing: 6) {
+            Image(systemName: FileIcon.symbol(for: file.fileName))
+                .font(.caption)
+                .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.9))
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(file.fileName)
+                    .lineLimit(1)
+                    .strikethrough(file.code == "D")
+                    .foregroundStyle(Color.ghText.onSelection(selected))
+                Text(file.originalPath.map { "← \($0)" } ?? file.directory)
+                    .font(.caption)
+                    .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.85))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 4)
+            Text(String(file.code))
+                .font(.caption.monospaced().weight(.bold))
+                .foregroundStyle((Color.ghStatus(file.code) ?? .ghModified).onSelection(selected))
+        }
+        .help(file.path)
     }
 }

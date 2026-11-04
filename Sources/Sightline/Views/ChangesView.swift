@@ -126,6 +126,7 @@ private struct SectionHeader: View {
 }
 
 private struct FileRow: View {
+    @Environment(\.backgroundProminence) private var prominence
     let store: AppStore
     let file: FileChange
     @State private var hovering = false
@@ -134,11 +135,12 @@ private struct FileRow: View {
 
     var body: some View {
         let isReviewed = store.isReviewed(file)
+        let selected = prominence == .increased
         HStack(spacing: 6) {
             Button { store.toggleReviewed(file) } label: {
                 Image(systemName: isReviewed ? "checkmark.square.fill" : "square")
                     .font(.system(size: 12))
-                    .foregroundStyle(isReviewed ? Color.ghAdded : Color.ghMuted.opacity(0.7))
+                    .foregroundStyle((isReviewed ? Color.ghAdded : Color.ghMuted.opacity(0.7)).onSelection(selected))
                     .frame(width: 16, height: 16)
                     .contentShape(Rectangle())
             }
@@ -146,23 +148,23 @@ private struct FileRow: View {
             .help(isReviewed ? "Reviewed. Click to unmark (⌥⌘V)." : "Mark as reviewed (⌥⌘V). Resets if the file changes again.")
             Image(systemName: FileIcon.symbol(for: file.fileName))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.9))
                 .frame(width: 14)
             Text(file.fileName)
                 .lineLimit(1)
                 .strikethrough(file.code == "D")
-                .foregroundStyle(isReviewed ? Color.ghMuted : Color.ghText)
+                .foregroundStyle((isReviewed ? Color.ghMuted : Color.ghText).onSelection(selected))
                 .layoutPriority(1)
             Text(file.originalPath.map { "← \($0)" } ?? file.directory)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.85))
                 .lineLimit(1)
                 .truncationMode(.head)
             Spacer(minLength: 4)
-            if hovering { actions }
+            if hovering { actions.foregroundStyle(Color.ghAccent.onSelection(selected)) }
             Text(String(file.code == "?" ? "U" : file.code))
                 .font(.caption.monospaced().weight(.bold))
-                .foregroundStyle(color)
+                .foregroundStyle(color.onSelection(selected))
                 .frame(width: 12)
         }
         .contentShape(Rectangle())

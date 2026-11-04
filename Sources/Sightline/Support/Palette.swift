@@ -70,3 +70,11 @@ extension Color {
         Palette.status(code).map { Color(nsColor: $0) }
     }
 }
+
+extension Color {
+    /// On a selected row (the list draws the accent fill: `backgroundProminence == .increased`) custom colors
+    /// lose contrast, so use white there.
+    func onSelection(_ selected: Bool, opacity: Double = 1) -> Color {
+        selected ? Color.white.opacity(opacity) : self
+    }
+}

@@ -304,6 +304,7 @@ final class AppStore {
         explorers[repo.id] = model
         explorer = model
         if panel == .history { loadHistoryIfNeeded() }
+        if panel == .search, !searchOptions.allRepos, !searchQuery.isEmpty { scheduleSearch(immediately: true) }
         if let path = model.selectedPath, FileManager.default.fileExists(atPath: path),
            !((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? true) {
             openFile(path)
@@ -541,7 +542,8 @@ final class AppStore {
             isSearching = false
             return
         }
-        let repos = repos
+        // This repo (default) or every repo under the root.
+        let repos = options.allRepos ? repos : selectedRepo.map { [$0] } ?? []
         isSearching = true
         searchTask = Task {
             if !immediately { try? await Task.sleep(for: .milliseconds(350)) }
@@ -800,6 +802,7 @@ final class AppStore {
             if let controller = session.controller,
                let repo = reposByDepth.first(where: { path.hasPrefix($0.path + "/") }) {
                 controller.blameEnabled = showLineBlame
+                controller.onCommandClick = { [weak self] word in self?.searchSymbol(word, fromFile: path) }
                 controller.blameContext = EditorController.BlameContext(
                     repoPath: repo.path,
                     relativePath: String(path.dropFirst(repo.path.count + 1)),
@@ -1094,13 +1097,43 @@ final class AppStore {
         UserDefaults.standard.set(editor.id, forKey: Self.editorKey)
     }
 
+    /// Opens the file's git repo as the editor's workspace, with the file at `line`.
     func openExternally(path: String, line: Int? = nil, editor: ExternalEditor? = nil) {
         guard let target = editor ?? preferredEditor else {
             errorMessage = "No supported code editor found (VS Code, Cursor, Windsurf, Zed, Sublime Text, Xcode)."
             return
         }
         if let editor { setPreferredEditor(editor) }
-        target.open(path: path, line: line)
+        let repo = reposByDepth.first { path == $0.path || path.hasPrefix($0.path + "/") }?.path
+        let isFile = !((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false)
+        target.open(repo: repo, file: isFile && path != repo ? path : nil, line: line)
+    }
+
+    // MARK: ⌘-click → search
+
+    /// ⌘-click on a name: search the file's repo for it (exact case, whole word) in files of the same language.
+    func searchSymbol(_ word: String, fromFile path: String?) {
+        searchQuery = word
+        searchOptions = WorkspaceSearchOptions(
+            matchCase: true, wholeWord: true, regex: false,
+            include: path.map(Self.languageGlobs) ?? "", exclude: WorkspaceSearchOptions.defaultExclude,
+            allRepos: false
+        )
+        showSearch()
+        scheduleSearch(immediately: true)
+    }
+
+    /// Globs for the language family of `path` ("a.ts" → "*.ts, *.tsx, *.mts, *.cts").
+    nonisolated static func languageGlobs(_ path: String) -> String {
+        let ext = (path as NSString).pathExtension.lowercased()
+        let families: [[String]] = [
+            ["ts", "tsx", "mts", "cts"], ["js", "jsx", "mjs", "cjs"], ["py", "pyi"], ["kt", "kts"],
+            ["c", "h"], ["cpp", "cc", "cxx", "hpp", "hh", "h"], ["md", "mdx", "markdown"], ["yml", "yaml"],
+            ["sh", "bash", "zsh"], ["css", "scss", "sass", "less"], ["html", "htm"],
+        ]
+        guard !ext.isEmpty else { return "" }
+        let family = families.first { $0.contains(ext) } ?? [ext]
+        return family.map { "*.\($0)" }.joined(separator: ", ")
     }
 
     func revealInFinder(_ path: String) {

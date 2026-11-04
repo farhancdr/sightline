@@ -12,6 +12,7 @@ struct SearchPanel: View {
     var body: some View {
         VStack(spacing: 8) {
             searchField
+            scopePicker
             if showFilters { filters }
             status
             results
@@ -28,7 +29,7 @@ struct SearchPanel: View {
     private var searchField: some View {
         HStack(spacing: 4) {
             Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(Color.ghMuted)
-            TextField("Search all repos (⇧⌘F)", text: $store.searchQuery)
+            TextField("Search (⇧⌘F)", text: $store.searchQuery)
                 .textFieldStyle(.plain)
                 .focused($queryFocused)
                 .onSubmit { store.scheduleSearch(immediately: true) }
@@ -54,7 +55,23 @@ struct SearchPanel: View {
         .padding(.horizontal, 10)
     }
 
-    private var hasFilters: Bool { !store.searchOptions.include.isEmpty || !store.searchOptions.exclude.isEmpty }
+    private var hasFilters: Bool {
+        !store.searchOptions.include.isEmpty || store.searchOptions.exclude != WorkspaceSearchOptions.defaultExclude
+    }
+
+    private var scopePicker: some View {
+        Picker("", selection: $store.searchOptions.allRepos) {
+            Text("This repo").tag(false)
+            Text("All repos").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .help(store.searchOptions.allRepos
+              ? "Searching every repo under the root"
+              : "Searching \(store.selectedRepo?.name ?? "the selected repo") only")
+    }
 
     private var filters: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -78,8 +95,8 @@ struct SearchPanel: View {
                 Text(error).lineLimit(2)
             } else if !store.searchQuery.isEmpty {
                 Text(results.matchCount == 0
-                     ? "No results"
-                     : "\(results.matchCount)\(results.truncated ? "+" : "") results in \(results.files.count) files")
+                     ? "No results\(scopeSuffix)"
+                     : "\(results.matchCount)\(results.truncated ? "+" : "") results in \(results.files.count) files\(scopeSuffix)")
                 if results.truncated {
                     Text("(showing the first \(WorkspaceSearch.maxMatches))").foregroundStyle(Color.ghModified)
                 }
@@ -98,6 +115,10 @@ struct SearchPanel: View {
         .font(.caption)
         .foregroundStyle(Color.ghMuted)
         .padding(.horizontal, 12)
+    }
+
+    private var scopeSuffix: String {
+        store.searchOptions.allRepos ? "" : " in \(store.selectedRepo?.name ?? "this repo")"
     }
 
     // MARK: Results
@@ -206,13 +227,16 @@ private struct FileHeader: View {
 }
 
 private struct MatchRow: View {
+    @Environment(\.backgroundProminence) private var prominence
     let match: SearchMatch
+
+    private var selected: Bool { prominence == .increased }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("\(match.line)")
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(Color.ghMuted)
+                .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.85))
                 .frame(minWidth: 26, alignment: .trailing)
             Text(highlighted)
                 .font(.system(size: 12, design: .monospaced))
@@ -224,13 +248,13 @@ private struct MatchRow: View {
 
     private var highlighted: AttributedString {
         var string = AttributedString(match.text)
-        string.foregroundColor = .ghText
+        string.foregroundColor = Color.ghText.onSelection(selected)
         let ns = match.text as NSString
         for range in match.ranges where NSMaxRange(range) <= ns.length {
             guard let swiftRange = Range(range, in: match.text),
                   let lower = AttributedString.Index(swiftRange.lowerBound, within: string),
                   let upper = AttributedString.Index(swiftRange.upperBound, within: string) else { continue }
-            string[lower..<upper].backgroundColor = Color.ghModified.opacity(0.28)
+            string[lower..<upper].backgroundColor = selected ? Color.white.opacity(0.28) : Color.ghModified.opacity(0.28)
             string[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
         }
         return string

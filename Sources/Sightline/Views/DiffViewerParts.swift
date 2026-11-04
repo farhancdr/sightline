@@ -61,7 +61,8 @@ struct DiffBody: View {
                     sideBySide: sideBySide,
                     nav: nav,
                     referencePath: referencePath,
-                    onReferenceCopied: { store.showToast("Copied \($0)") }
+                    onReferenceCopied: { store.showToast("Copied \($0)") },
+                    onCommandClick: { word in store.searchSymbol(word, fromFile: store.diffAbsolutePath) }
                 )
                 .id(sideBySide) // different NSView per layout
             }

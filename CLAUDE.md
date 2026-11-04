@@ -90,12 +90,22 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   via `APP_RES`) and its render routine are injected as `WKUserScript`s in `.defaultClient`, so diagrams render
   while page scripts stay disabled (`MermaidPreviewTests` checks both). `replaceText` posts
   `NSText.didChangeNotification` so disk reloads refresh the preview.
-- **Workspace search:** `WorkspaceSearch` runs `git grep -z -n --column --untracked -m 100` per repo (8 in
-  parallel), `-P` for regex with a `-E` fallback; highlight ranges come from an equivalent `NSRegularExpression`
+- **Workspace search:** `WorkspaceSearch` runs `git grep -z -n --column -m 100` per repo (8 in parallel), twice:
+  tracked files, then `--untracked` (merged, deduped by path), because `--untracked` alone skips *tracked* files
+  inside gitignored folders. Default scope is the selected repo; default exclude is `node_modules, dist` (a plain
+  name expands to `**/name` + `**/name/**`), `-P` for regex with a `-E` fallback; highlight ranges come from an equivalent `NSRegularExpression`
   (validated first). `-z` output is `path\0line\0col\0text`. Results cap at 2000 matches. The type is named
   `WorkspaceSearchOptions` because SwiftTerm exports a `SearchOptions`.
+- **⌘-click:** `CodeTextView.mouseDown` (editor + diff columns) → `AppStore.searchSymbol`: Match Case + Whole Word,
+  include = `languageGlobs(path)`. Word boundaries everywhere come from `CodeTextView.identifierRange`
+  (AppKit's word selection treats `a.b` as one word).
+- **Open in editor:** uses the CLI inside the editor's .app (`code <repo> -g file:line`, `zed <repo> file:line`)
+  so the repo opens as the workspace; URL scheme / plain open is only a fallback.
 - **Navigation:** jumps go through `AppStore.open(path:line:column:length:record:)`, which records the caret for
   ⌥-/⌥= and reveals the location once the file loads (`pendingReveal`).
+- **Overlaying views:** don't put headers in `.safeAreaInset` over a List (rows scroll visibly underneath), and
+  give draggable handles real layout width: AppKit-backed neighbours (editor, terminal) are drawn on top of any
+  SwiftUI overlay that extends past its frame and take the mouse.
 - **Dividers:** use `VerticalRule` (theme border color); the system split divider is invisible on the dark sidebar.
 - **SVG text:** macOS's SVG renderer ignores font-weight/letter-spacing/tspan colors; `render-assets.swift`
   strips `<text>` and draws it with the system font.

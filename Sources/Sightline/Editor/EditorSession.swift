@@ -120,7 +120,7 @@ final class EditorController: NSObject, NSTextViewDelegate {
         container.lineFragmentPadding = 8
         layoutManager.addTextContainer(container)
 
-        textView = NSTextView(frame: .zero, textContainer: container)
+        textView = CodeTextView(frame: .zero, textContainer: container)
         scrollView = NSScrollView()
         super.init()
 
@@ -232,6 +232,12 @@ final class EditorController: NSObject, NSTextViewDelegate {
     /// "path:12" or "path:12-30".
     nonisolated static func reference(path: String, lines: ClosedRange<Int>) -> String {
         lines.count > 1 ? "\(path):\(lines.lowerBound)-\(lines.upperBound)" : "\(path):\(lines.lowerBound)"
+    }
+
+    /// ⌘-click on an identifier in the editor.
+    var onCommandClick: ((String) -> Void)? {
+        get { (textView as? CodeTextView)?.onCommandClick }
+        set { (textView as? CodeTextView)?.onCommandClick = newValue }
     }
 
     /// 1-based caret line (first line of the selection).

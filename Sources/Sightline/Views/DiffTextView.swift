@@ -264,7 +264,7 @@ final class DiffColumn {
         container.lineFragmentPadding = 8
         layoutManager.addTextContainer(container)
 
-        textView = NSTextView(frame: .zero, textContainer: container)
+        textView = CodeTextView(frame: .zero, textContainer: container)
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false
@@ -469,6 +469,8 @@ protocol DiffHostView: NSView {
     func copyReference()
     /// Line in the current (new) file at the caret, for "Open in Editor".
     func caretLine() -> Int?
+    /// ⌘-click on an identifier in either column.
+    var onCommandClick: ((String) -> Void)? { get set }
 }
 
 extension DiffHostView {
@@ -503,6 +505,12 @@ final class SplitDiffView: NSView, DiffHostView {
     private var pendingScrollRow: Int?
     var referencePath = ""
     var onReferenceCopied: ((String) -> Void)?
+    var onCommandClick: ((String) -> Void)? {
+        didSet {
+            (left.textView as? CodeTextView)?.onCommandClick = onCommandClick
+            (right.textView as? CodeTextView)?.onCommandClick = onCommandClick
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -603,6 +611,9 @@ final class InlineDiffView: NSView, DiffHostView {
     private var pendingScrollRow: Int?
     var referencePath = ""
     var onReferenceCopied: ((String) -> Void)?
+    var onCommandClick: ((String) -> Void)? {
+        didSet { (column.textView as? CodeTextView)?.onCommandClick = onCommandClick }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -689,6 +700,7 @@ struct DiffContentView: NSViewRepresentable {
     /// Workspace-root-relative path for "path:line" references.
     let referencePath: String
     let onReferenceCopied: (String) -> Void
+    var onCommandClick: ((String) -> Void)?
 
     func makeNSView(context: Context) -> NSView {
         sideBySide ? SplitDiffView(frame: .zero) : InlineDiffView(frame: .zero)
@@ -698,6 +710,7 @@ struct DiffContentView: NSViewRepresentable {
         guard let host = view as? DiffHostView else { return }
         host.referencePath = referencePath
         host.onReferenceCopied = onReferenceCopied
+        host.onCommandClick = onCommandClick
         DiffReference.activeHost = host
         let coordinator = context.coordinator
         if coordinator.documentID != document.id {

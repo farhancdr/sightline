@@ -681,7 +681,7 @@ final class MermaidPreviewTests: XCTestCase {
 
 final class WorkspaceSearchTests: XCTestCase {
     func testArgumentsAndGlobs() {
-        var options = WorkspaceSearchOptions()
+        var options = WorkspaceSearchOptions(exclude: "")
         let plain = WorkspaceSearch.grepArguments("foo", options: options)
         XCTAssertTrue(plain.contains("-F") && plain.contains("-i") && !plain.contains("-w"))
         XCTAssertEqual(Array(plain.suffix(3)), ["-e", "foo", "--"])
@@ -694,6 +694,11 @@ final class WorkspaceSearchTests: XCTestCase {
         XCTAssertTrue(args.contains("-P") && args.contains("-w") && !args.contains("-i"))
         XCTAssertEqual(WorkspaceSearch.pathspecs(options), [":(glob)**/*.ts", ":(glob)src/**", ":(exclude,glob)**/*.spec.ts"])
         XCTAssertEqual(WorkspaceSearch.pathspecs(WorkspaceSearchOptions(exclude: "dist/**")), [".", ":(exclude,glob)dist/**"])
+        XCTAssertEqual(WorkspaceSearch.pathspecs(WorkspaceSearchOptions()), [
+            ".", ":(exclude,glob)**/node_modules", ":(exclude,glob)**/node_modules/**",
+            ":(exclude,glob)**/dist", ":(exclude,glob)**/dist/**",
+        ], "node_modules and dist are excluded by default, at any depth")
+        XCTAssertFalse(WorkspaceSearchOptions().allRepos, "searches the selected repo by default")
     }
 
     func testPreviewTrimsAndRebasesRanges() throws {
@@ -754,7 +759,104 @@ final class WorkspaceSearchTests: XCTestCase {
         results = await run("getUser", WorkspaceSearchOptions(include: "*.spec.ts"))
         XCTAssertEqual(results.files.map(\.repoRelativePath), ["src/user.spec.ts"])
 
+        // Committed (tracked) build output and vendored deps are still skipped by the default excludes.
+        try FileManager.default.createDirectory(at: repoDir.appendingPathComponent("packages/ui/dist"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: repoDir.appendingPathComponent("node_modules/lib"), withIntermediateDirectories: true)
+        try write("packages/ui/dist/index.js", "getUser bundled\n")
+        try write("node_modules/lib/index.js", "getUser vendored\n")
+        _ = try await Git.run(["add", "-f", "packages/ui/dist/index.js", "node_modules/lib/index.js"], in: repoPath)
+        results = await run("getUser")
+        XCTAssertFalse(results.files.contains { $0.repoRelativePath.contains("dist/") || $0.repoRelativePath.contains("node_modules/") })
+        results = await run("getUser", WorkspaceSearchOptions(exclude: ""))
+        XCTAssertTrue(results.files.contains { $0.repoRelativePath == "packages/ui/dist/index.js" })
+
         results = await run("(unclosed", WorkspaceSearchOptions(regex: true))
         XCTAssertEqual(results.error, "Invalid regular expression")
+    }
+}
+
+final class CodeWordSelectionTests: XCTestCase {
+    @MainActor
+    func testDoubleClickSelectsIdentifierOnly() {
+        let view = CodeTextView(frame: .zero)
+        view.string = "x = await this.orderRepository.findOrdersWithItems(id, snake_case, $el);"
+        let text = view.string as NSString
+        func word(at needle: String, offset: Int = 2) -> String {
+            let index = text.range(of: needle).location + offset
+            let range = view.selectionRange(forProposedRange: NSRange(location: index, length: 0), granularity: .selectByWord)
+            return text.substring(with: range)
+        }
+        XCTAssertEqual(word(at: "findOrdersWithItems"), "findOrdersWithItems")
+        XCTAssertEqual(word(at: "orderRepository"), "orderRepository")
+        XCTAssertEqual(word(at: "this"), "this")
+        XCTAssertEqual(word(at: "snake_case"), "snake_case")
+        XCTAssertEqual(word(at: "$el", offset: 0), "$el")
+
+        // Double-click-drag from "orderRepository…" into "findOrders…" extends to both identifiers' bounds.
+        let from = text.range(of: "orderRepository").location + 3
+        let to = text.range(of: "findOrdersWithItems").location + 4
+        let range = view.selectionRange(forProposedRange: NSRange(location: from, length: to - from), granularity: .selectByWord)
+        XCTAssertEqual(text.substring(with: range), "orderRepository.findOrdersWithItems")
+    }
+}
+
+final class CommandClickAndEditorTests: XCTestCase {
+    func testLanguageGlobs() {
+        XCTAssertEqual(AppStore.languageGlobs("/r/src/a.ts"), "*.ts, *.tsx, *.mts, *.cts")
+        XCTAssertEqual(AppStore.languageGlobs("/r/App.TSX"), "*.ts, *.tsx, *.mts, *.cts")
+        XCTAssertEqual(AppStore.languageGlobs("/r/main.go"), "*.go")
+        XCTAssertEqual(AppStore.languageGlobs("/r/Makefile"), "")
+    }
+
+    func testEditorArguments() {
+        XCTAssertEqual(
+            ExternalEditor.cliArguments(style: .vscode, repo: "/w/svc", file: "/w/svc/src/a.ts", line: 12),
+            ["/w/svc", "-g", "/w/svc/src/a.ts:12"]
+        )
+        XCTAssertEqual(ExternalEditor.cliArguments(style: .vscode, repo: "/w/svc", file: "/w/svc/a.ts", line: nil),
+                       ["/w/svc", "/w/svc/a.ts"])
+        XCTAssertEqual(ExternalEditor.cliArguments(style: .vscode, repo: "/w/svc", file: nil, line: nil), ["/w/svc"])
+        XCTAssertEqual(ExternalEditor.cliArguments(style: .pathWithLine, repo: "/w/svc", file: "/w/svc/a.go", line: 3),
+                       ["/w/svc", "/w/svc/a.go:3"])
+    }
+
+    @MainActor
+    func testSearchSymbolSetsExactWordSearch() {
+        let store = AppStore.shared
+        store.searchSymbol("findOrdersWithItems", fromFile: "/w/svc/src/OrderService.ts")
+        XCTAssertEqual(store.panel, .search)
+        XCTAssertEqual(store.searchQuery, "findOrdersWithItems")
+        XCTAssertTrue(store.searchOptions.matchCase && store.searchOptions.wholeWord && !store.searchOptions.regex)
+        XCTAssertEqual(store.searchOptions.include, "*.ts, *.tsx, *.mts, *.cts")
+        XCTAssertEqual(store.searchOptions.exclude, "node_modules, dist")
+        XCTAssertFalse(store.searchOptions.allRepos)
+    }
+
+    @MainActor
+    func testCommandClickReportsIdentifier() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 200), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+        view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        view.string = "x = await this.orderRepository.findOrdersWithItems(id);"
+        window.contentView?.addSubview(view)
+        var clicked: String?
+        view.onCommandClick = { clicked = $0 }
+
+        let text = view.string as NSString
+        let layoutManager = try XCTUnwrap(view.layoutManager)
+        let index = text.range(of: "findOrdersWithItems").location + 5
+        let glyph = layoutManager.glyphIndexForCharacter(at: index)
+        var rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer!)
+        rect.origin.x += view.textContainerOrigin.x
+        rect.origin.y += view.textContainerOrigin.y
+        let pointInWindow = view.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: pointInWindow, modifierFlags: [.command, .capsLock], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        view.mouseDown(with: event)
+        XCTAssertEqual(clicked, "findOrdersWithItems")
+        XCTAssertEqual(text.substring(with: view.selectedRange()), "findOrdersWithItems")
     }
 }

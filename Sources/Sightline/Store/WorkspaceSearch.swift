@@ -6,9 +6,14 @@ struct WorkspaceSearchOptions: Equatable, Sendable {
     var matchCase = false
     var wholeWord = false
     var regex = false
-    /// Comma-separated globs, e.g. "*.ts, src/**". A glob without "/" matches at any depth.
+    /// Comma-separated globs, e.g. "*.ts, src/**". A glob without "/" matches at any depth; a plain name
+    /// ("dist") matches that file or folder at any depth.
     var include = ""
-    var exclude = ""
+    var exclude = WorkspaceSearchOptions.defaultExclude
+    /// Search every repo under the root instead of only the selected one.
+    var allRepos = false
+
+    static let defaultExclude = "node_modules, dist"
 }
 
 struct SearchMatch: Identifiable, Hashable, Sendable {
@@ -60,7 +65,11 @@ enum WorkspaceSearch {
     static func pathspecs(_ options: WorkspaceSearchOptions) -> [String] {
         func globs(_ text: String) -> [String] {
             text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                .map { $0.contains("/") ? $0 : "**/" + $0 }
+                .flatMap { entry -> [String] in
+                    if entry.contains("/") { return [entry] }
+                    if entry.contains(where: { "*?[".contains($0) }) { return ["**/" + entry] }
+                    return ["**/" + entry, "**/" + entry + "/**"] // a file or a folder with that name, any depth
+                }
         }
         let include = globs(options.include).map { ":(glob)\($0)" }
         let exclude = globs(options.exclude).map { ":(exclude,glob)\($0)" }
@@ -68,8 +77,11 @@ enum WorkspaceSearch {
         return (include.isEmpty ? ["."] : include) + exclude
     }
 
-    static func grepArguments(_ query: String, options: WorkspaceSearchOptions) -> [String] {
-        var args = ["grep", "-z", "-n", "--column", "-I", "--untracked", "--no-color", "-m", "\(maxPerFile)"]
+    /// `untracked: false` searches tracked files only; `true` adds untracked (non-ignored) files. Both are run,
+    /// because `--untracked` alone skips tracked files that sit inside gitignored folders.
+    static func grepArguments(_ query: String, options: WorkspaceSearchOptions, untracked: Bool = false) -> [String] {
+        var args = ["grep", "-z", "-n", "--column", "-I", "--no-color", "-m", "\(maxPerFile)"]
+        if untracked { args.insert("--untracked", at: 1) }
         args.append(options.regex ? "-P" : "-F")
         if !options.matchCase { args.append("-i") }
         if options.wholeWord { args.append("-w") }
@@ -85,7 +97,8 @@ enum WorkspaceSearch {
         } catch {
             return SearchResults(error: "Invalid regular expression")
         }
-        let args = grepArguments(query, options: options)
+        let trackedArgs = grepArguments(query, options: options)
+        let untrackedArgs = grepArguments(query, options: options, untracked: true)
 
         var perRepo: [(Int, [SearchFileResult])] = []
         var firstError: String?
@@ -99,15 +112,20 @@ enum WorkspaceSearch {
                 group.addTask {
                     do {
                         // Exit code 1 = no matches.
-                        let result: GitResult
-                        do {
-                            result = try await Git.run(args, in: repo.path, okCodes: [0, 1])
-                        } catch where options.regex && error.localizedDescription.contains("Perl") {
-                            // git built without PCRE: fall back to extended regex.
-                            let extended = args.map { $0 == "-P" ? "-E" : $0 }
-                            result = try await Git.run(extended, in: repo.path, okCodes: [0, 1])
+                        func grep(_ args: [String]) async throws -> String {
+                            do {
+                                return try await Git.run(args, in: repo.path, okCodes: [0, 1]).output
+                            } catch where options.regex && error.localizedDescription.contains("Perl") {
+                                // git built without PCRE: fall back to extended regex.
+                                return try await Git.run(args.map { $0 == "-P" ? "-E" : $0 }, in: repo.path,
+                                                         okCodes: [0, 1]).output
+                            }
                         }
-                        return (index, .success(parse(result.output, repo: repo, highlight: highlight)))
+                        var files = parse(try await grep(trackedArgs), repo: repo, highlight: highlight)
+                        let seen = Set(files.map(\.repoRelativePath))
+                        files += parse(try await grep(untrackedArgs), repo: repo, highlight: highlight)
+                            .filter { !seen.contains($0.repoRelativePath) }
+                        return (index, .success(files))
                     } catch {
                         return (index, .failure(error))
                     }

@@ -20,7 +20,7 @@ struct OpenInEditorButtons: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Open in \(preferred.name) at this line (⇧⌘E). Click the arrow to choose an editor.")
+                .help("Open this repo in \(preferred.name), at this file and line (⇧⌘E). Click the arrow to choose an editor.")
             }
             ActionButton(symbol: "folder", help: "Reveal in Finder (⌥⌘R)") {
                 if let path = location()?.path { store.revealInFinder(path) }

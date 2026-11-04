@@ -38,8 +38,11 @@ So Sightline does just those things, quickly.
   One click filters it down to **only the repos with changes or unpushed commits**.
 - Changes made by an agent or in a terminal show up immediately (FSEvents watcher, no polling, no manual refresh).
 - **⌘P: Go to File across every repo**, fuzzy-matched (≈15k files indexed in ~0.2 s via `git ls-files`).
-- **⇧⌘F: search inside files across every repo**, like VS Code: match case, whole word, regex, files to
-  include/exclude. Results are grouped by file with highlighted matches; ~0.5 s across 50 repos.
+- **⇧⌘F: search inside files**, like VS Code: match case, whole word, regex, files to include/exclude
+  (`node_modules` and `dist` excluded by default). Searches the selected repo, or switch to **All repos**
+  (~0.5 s across 50 repos). Results are grouped by file with highlighted matches.
+- **⌘-click any name** (function, class, variable) to search its repo for it: exact case, whole word, in files
+  of the same language (a `.ts` file searches `*.ts, *.tsx, …`). A lightweight "find usages" with no language server.
 - **⌥- / ⌥=: go back / forward** through the places you jumped from (search results, ⌘P, the explorer).
 - **⌘T: jump to a repo**, sorted by folder or by most recently opened.
 
@@ -59,7 +62,8 @@ So Sightline does just those things, quickly.
 - Stage, unstage and discard per file or per section, then **Commit** or **Commit (No Verify)**. Git hooks
   run with your login-shell `PATH`, so husky/lint-staged find `node`/`npx` even when the app is opened from Finder.
 - **Fetch, Pull (fast-forward only) and Push** (publishes new branches), plus branch switching.
-- **Open in your editor at the exact line** (VS Code, Cursor, Windsurf, Zed, Sublime Text, Xcode), or reveal in Finder.
+- **Open in your editor**: opens the file's repo as the workspace, with the file at the exact line
+  (VS Code, Cursor, Windsurf, Zed, Sublime Text, Xcode), or reveal in Finder.
 
 **Just enough to fix things by hand**
 - File explorer with git status colors, a plain-text editor (syntax highlighting, find, auto-indent, ⌘S).
@@ -116,7 +120,8 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 | ⌘⏎ | Commit |
 | ⌘1 / ⌘2 / ⌘3 | Changes / Files / History |
 | ⌥⌘V | Toggle "reviewed" for the selected file |
-| ⇧⌘E | Open the focused file in your editor at the caret line |
+| ⇧⌘E | Open the file's repo in your editor, at the file and caret line |
+| ⌘-click | Search the repo for that name (exact case, whole word, same language) |
 | ⌥⌘R | Reveal in Finder |
 | ⇧⌘L / ⇧⌘K | Pull / Push |
 | ⌘S | Save file |
