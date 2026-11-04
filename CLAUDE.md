@@ -101,6 +101,16 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   (AppKit's word selection treats `a.b` as one word).
 - **Open in editor:** uses the CLI inside the editor's .app (`code <repo> -g file:line`, `zed <repo> file:line`)
   so the repo opens as the workspace; URL scheme / plain open is only a fallback.
+- **Editor keys:** line commands live in `CodeTextView+Editing.swift` and go through `shouldChangeText`/
+  `didChangeText` (undoable, re-highlighted). ⌘ shortcuts are menu items that `sendAction` to the first responder
+  (no-op unless the editor has focus); ⌥↑/⌥↓ are handled in `keyDown` so the terminal keeps them. ⌘W closes the
+  file/diff, never the window (⇧⌘W does). Check new shortcuts for collisions:
+  `grep -oE 'keyboardShortcut\("[^"]+"(, modifiers: [^)]*\))?' Sources/Sightline/App/SightlineApp.swift | sort | uniq -d`.
+- **Vim mode:** `VimEngine` (Editor/VimEngine.swift) is attached to `CodeTextView.vim` when View → Vim Mode is
+  on. Keys reach it from `keyDown` (and `performKeyEquivalent` for ⌃ keys, so Vim beats the menus); ⌘ keys never
+  go to Vim. A pending operator owns all following keys (`handleOperatorPending`). Edits use `CodeTextView.replace`
+  (undoable); `.` replays recorded keys plus a `.text` key for what was typed in Insert mode. Tests drive it with
+  `vim.feed("…")` on a text view hosted in a window (undo needs a window).
 - **Navigation:** jumps go through `AppStore.open(path:line:column:length:record:)`, which records the caret for
   ⌥-/⌥= and reveals the location once the file loads (`pendingReveal`).
 - **Overlaying views:** don't put headers in `.safeAreaInset` over a List (rows scroll visibly underneath), and

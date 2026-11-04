@@ -860,3 +860,257 @@ final class CommandClickAndEditorTests: XCTestCase {
         XCTAssertEqual(text.substring(with: view.selectedRange()), "findOrdersWithItems")
     }
 }
+
+final class LineEditingTests: XCTestCase {
+    private var windows: [NSWindow] = []
+
+    func testToggleCommentHelpers() {
+        let block = "    foo()\n\n      bar()\n"
+        let commented = CodeTextView.toggledComment(block, token: "//")
+        XCTAssertEqual(commented, "    // foo()\n\n    //   bar()\n", "commented at the smallest indent; blank lines untouched")
+        XCTAssertEqual(CodeTextView.toggledComment(commented!, token: "//"), block, "toggling twice restores the text")
+        XCTAssertEqual(CodeTextView.toggledComment("# a\nb", token: "#"), "# # a\n# b", "mixed → comment all")
+        XCTAssertNil(CodeTextView.toggledComment("   \n", token: "//"))
+    }
+
+    func testIndentHelpers() {
+        XCTAssertEqual(CodeTextView.indented("a\n\nb\n", unit: "  "), "  a\n\n  b\n")
+        XCTAssertEqual(CodeTextView.outdented("    a\n\tb\n c\n", unit: "  "), "  a\nb\nc\n")
+        XCTAssertEqual(CodeTextView.detectIndentUnit("a\n  b\n    c\n"), "  ")
+        XCTAssertEqual(CodeTextView.detectIndentUnit("a\n    b\n        c\n"), "    ")
+        XCTAssertEqual(CodeTextView.detectIndentUnit("func a() {\n\tb()\n}\n"), "\t")
+    }
+
+    @MainActor
+    private func makeView(_ text: String, caretOnLine line: Int) -> CodeTextView {
+        let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        view.isEditable = true
+        view.allowsUndo = true
+        view.string = text
+        // Undo comes from the window, as in the app.
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView?.addSubview(view)
+        windows.append(window)
+        let lines = text.components(separatedBy: "\n")
+        let offset = lines.prefix(line - 1).reduce(0) { $0 + ($1 as NSString).length + 1 }
+        view.setSelectedRange(NSRange(location: offset, length: 0))
+        return view
+    }
+
+    @MainActor
+    func testMoveCopyDeleteSelect() {
+        var view = makeView("one\ntwo\nthree", caretOnLine: 2)
+        view.moveLinesUp(nil)
+        XCTAssertEqual(view.string, "two\none\nthree")
+        view.moveLinesDown(nil)
+        view.moveLinesDown(nil)
+        XCTAssertEqual(view.string, "one\nthree\ntwo", "moving the last line handles the missing newline")
+        view.undoManager?.undo()
+        XCTAssertEqual(view.string, "one\ntwo\nthree", "undo restores (moves are undoable)")
+
+        view = makeView("one\ntwo\nthree", caretOnLine: 2)
+        view.copyLinesDown(nil)
+        XCTAssertEqual(view.string, "one\ntwo\ntwo\nthree")
+        view = makeView("one\ntwo\nthree", caretOnLine: 3)
+        view.copyLinesUp(nil)
+        XCTAssertEqual(view.string, "one\ntwo\nthree\nthree")
+
+        view = makeView("one\ntwo\nthree", caretOnLine: 2)
+        view.deleteLines(nil)
+        XCTAssertEqual(view.string, "one\nthree")
+        view = makeView("one\ntwo\nthree", caretOnLine: 3)
+        view.deleteLines(nil)
+        XCTAssertEqual(view.string, "one\ntwo", "deleting the last line removes the newline before it")
+
+        view = makeView("one\ntwo\nthree", caretOnLine: 1)
+        view.selectLineExtending(nil)
+        XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "one\n")
+        view.selectLineExtending(nil)
+        XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "one\ntwo\n")
+
+        view = makeView("let a = 1\nlet b = 2\n", caretOnLine: 1)
+        view.lineCommentToken = "//"
+        view.setSelectedRange(NSRange(location: 0, length: 12)) // spans both lines
+        view.toggleLineComment(nil)
+        XCTAssertEqual(view.string, "// let a = 1\n// let b = 2\n")
+    }
+}
+
+@MainActor
+final class VimEngineTests: XCTestCase {
+    private var windows: [NSWindow] = []
+
+    private func makeVim(_ text: String, at offset: Int = 0) -> (CodeTextView, VimEngine) {
+        let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        view.isEditable = true
+        view.allowsUndo = true
+        view.string = text
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView?.addSubview(view)
+        window.makeFirstResponder(view)
+        windows.append(window)
+        view.setSelectedRange(NSRange(location: offset, length: 0))
+        let vim = VimEngine(view: view)
+        view.vim = vim
+        return (view, vim)
+    }
+
+    private func caret(_ view: CodeTextView) -> Int { view.selectedRange().location }
+
+    func testMotions() {
+        let (view, vim) = makeVim("foo.bar(baz) qux\n  second line\nthird")
+        vim.feed("w"); XCTAssertEqual(caret(view), 3)      // "."
+        vim.feed("w"); XCTAssertEqual(caret(view), 4)      // "bar"
+        vim.feed("W"); XCTAssertEqual(caret(view), 13)     // "qux"
+        vim.feed("b"); XCTAssertEqual(caret(view), 11)     // ")"
+        vim.feed("0"); XCTAssertEqual(caret(view), 0)
+        vim.feed("e"); XCTAssertEqual(caret(view), 2)
+        vim.feed("$"); XCTAssertEqual(caret(view), 15)
+        vim.feed("j"); XCTAssertEqual(caret(view), 29)     // last char of "  second line" (17…29)
+        vim.feed("^"); XCTAssertEqual(caret(view), 19)
+        vim.feed("G"); XCTAssertEqual(caret(view), 31)
+        vim.feed("gg"); XCTAssertEqual(caret(view), 0)
+        vim.feed("fb"); XCTAssertEqual(caret(view), 4)
+        vim.feed(";"); XCTAssertEqual(caret(view), 8)
+        vim.feed("0tz"); XCTAssertEqual(caret(view), 9)
+        vim.feed("2G"); XCTAssertEqual(caret(view), 19)
+        vim.feed("0f(%"); XCTAssertEqual(caret(view), 17, "no bracket on line 2: f( and % stay at the line start")
+    }
+
+    func testDeleteChangeYankPaste() {
+        var (view, vim) = makeVim("one two three\nfour\nfive")
+        vim.feed("dw"); XCTAssertEqual(view.string, "two three\nfour\nfive")
+        vim.feed("x"); XCTAssertEqual(view.string, "wo three\nfour\nfive")
+        vim.feed("dd"); XCTAssertEqual(view.string, "four\nfive")
+        vim.feed("p"); XCTAssertEqual(view.string, "four\nwo three\nfive")
+        XCTAssertEqual(caret(view), 5)
+        vim.feed("yyP"); XCTAssertEqual(view.string, "four\nwo three\nwo three\nfive")
+        vim.feed("2dd"); XCTAssertEqual(view.string, "four\nfive")
+
+        (view, vim) = makeVim("let name = \"old value\";")
+        vim.feed("fociwfresh\u{1B}")
+        XCTAssertEqual(view.string, "let name = \"fresh value\";")
+        vim.feed("ci\"new\u{1B}")
+        XCTAssertEqual(view.string, "let name = \"new\";")
+        XCTAssertEqual(vim.mode, .normal)
+
+        (view, vim) = makeVim("call(a, b) { body }", at: 5) // inside the parentheses
+        vim.feed("di(")
+        XCTAssertEqual(view.string, "call() { body }")
+        vim.feed("f{da{")
+        XCTAssertEqual(view.string, "call() ")
+
+        (view, vim) = makeVim("alpha beta")
+        vim.feed("cwgamma\u{1B}")
+        XCTAssertEqual(view.string, "gamma beta", "cw changes to the end of the word only")
+        vim.feed("wD")
+        XCTAssertEqual(view.string, "gamma ")
+    }
+
+    func testInsertCommandsAndEscape() {
+        let (view, vim) = makeVim("  body\nend")
+        vim.feed("Ahead\u{1B}"); XCTAssertEqual(view.string, "  bodyhead\nend")
+        XCTAssertEqual(caret(view), 9, "Esc steps back onto the last inserted character")
+        vim.feed("Itop \u{1B}"); XCTAssertEqual(view.string, "  top bodyhead\nend")
+        vim.feed("onext\u{1B}"); XCTAssertEqual(view.string, "  top bodyhead\n  next\nend", "o keeps indentation")
+        vim.feed("Oprev\u{1B}"); XCTAssertEqual(view.string, "  top bodyhead\n  prev\n  next\nend")
+        vim.feed("ggJ"); XCTAssertEqual(view.string, "  top bodyhead prev\n  next\nend")
+        vim.feed("0rX"); XCTAssertEqual(view.string, "X top bodyhead prev\n  next\nend")
+        vim.feed("w~"); XCTAssertEqual(view.string, "X Top bodyhead prev\n  next\nend")
+        vim.feed("guiw"); XCTAssertEqual(view.string, "X top bodyhead prev\n  next\nend")
+        vim.feed("gUiw"); XCTAssertEqual(view.string, "X TOP bodyhead prev\n  next\nend")
+    }
+
+    func testUndoRedoAndDotRepeat() {
+        var (view, vim) = makeVim("a b c d")
+        vim.feed("x"); XCTAssertEqual(view.string, " b c d")
+        vim.feed("u"); XCTAssertEqual(view.string, "a b c d")
+        vim.handle(.ctrl("r")); XCTAssertEqual(view.string, " b c d")
+
+        (view, vim) = makeVim("one\ntwo\nthree\nfour")
+        vim.feed("dd.")
+        XCTAssertEqual(view.string, "three\nfour")
+
+        (view, vim) = makeVim("foo bar foo")
+        var changes = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSText.didChangeNotification, object: view, queue: nil) { _ in
+            changes += 1
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        vim.feed("ciwbaz\u{1B}ww")
+        let beforeRepeat = changes
+        vim.feed(".")
+        XCTAssertEqual(view.string, "baz bar baz", ". repeats ciw + the typed text")
+        XCTAssertGreaterThan(changes, beforeRepeat, "replayed edits post textDidChange (dirty flag, blame, highlighting)")
+    }
+
+    func testVisualModes() {
+        var (view, vim) = makeVim("hello world\nsecond\nthird")
+        vim.feed("vlld"); XCTAssertEqual(view.string, "lo world\nsecond\nthird")
+        XCTAssertEqual(vim.mode, .normal)
+        vim.feed("jVy")
+        vim.feed("ggP"); XCTAssertEqual(view.string, "second\nlo world\nsecond\nthird")
+        vim.feed("Vj>"); XCTAssertEqual(view.string, "  second\n  lo world\nsecond\nthird")
+        vim.feed("viwU"); XCTAssertEqual(view.string, "  SECOND\n  lo world\nsecond\nthird")
+
+        (view, vim) = makeVim("keep [inner] keep")
+        vim.feed("fivi[d")
+        XCTAssertEqual(view.string, "keep [] keep")
+    }
+
+    func testSearchAndExCommands() {
+        var (view, vim) = makeVim("alpha\nbeta alpha\ngamma alpha")
+        var actions: [VimEngine.Action] = []
+        vim.onAction = { actions.append($0) }
+        vim.feed("/alpha\n"); XCTAssertEqual(caret(view), 11)
+        vim.feed("n"); XCTAssertEqual(caret(view), 23)
+        vim.feed("n"); XCTAssertEqual(caret(view), 0, "search wraps around")
+        vim.feed("N"); XCTAssertEqual(caret(view), 23)
+        vim.feed(":2\n"); XCTAssertEqual(caret(view), 6)
+        vim.feed(":s/alpha/omega/\n"); XCTAssertEqual(view.string, "alpha\nbeta omega\ngamma alpha")
+        vim.feed(":%s/a/A/g\n"); XCTAssertEqual(view.string, "AlphA\nbetA omegA\ngAmmA AlphA")
+        vim.feed(":w\n:q\nZZ")
+        vim.feed("ggwgd")
+        XCTAssertEqual(actions.count, 4, "save, close, save+close, then gd")
+        if case let .searchWord(word) = actions.last { XCTAssertEqual(word, "betA") } else { XCTFail("gd searches the word") }
+
+        (view, vim) = makeVim("let total = sum(total)")
+        vim.feed("w*"); XCTAssertEqual(caret(view), 16, "* finds the next whole-word match")
+        _ = view
+    }
+}
+
+@MainActor
+final class VimKeyRoutingTests: XCTestCase {
+    func testRealKeyEventsRouteThroughVim() throws {
+        let view = CodeTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
+        view.isEditable = true
+        view.allowsUndo = true
+        view.string = "abc"
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView?.addSubview(view)
+        window.makeFirstResponder(view)
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        let vim = VimEngine(view: view)
+        view.vim = vim
+
+        func key(_ characters: String, code: UInt16, flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code
+            ))
+        }
+
+        view.keyDown(with: try key("x", code: 7))
+        XCTAssertEqual(view.string, "bc", "x in Normal mode deletes")
+        view.keyDown(with: try key("i", code: 34))
+        XCTAssertEqual(vim.mode, .insert)
+        view.keyDown(with: try key("Q", code: 12, flags: .shift))
+        view.keyDown(with: try key("!", code: 18, flags: .shift))
+        XCTAssertEqual(view.string, "Q!bc", "Insert mode types normally")
+        view.keyDown(with: try key("\u{1B}", code: 53))
+        XCTAssertEqual(vim.mode, .normal)
+        XCTAssertTrue(view.performKeyEquivalent(with: try key("r", code: 15, flags: .control)), "⌃r goes to Vim, not the menus")
+        XCTAssertNil(VimKey.from(try key("s", code: 1, flags: .command), mode: .normal), "⌘ shortcuts stay with the app")
+    }
+}

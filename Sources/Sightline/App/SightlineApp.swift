@@ -26,6 +26,39 @@ struct SightlineApp: App {
                 // Not disabled when clean: saveEditor() no-ops, and menu enablement may not track isDirty.
                 Button("Save") { store.saveEditor() }
                     .keyboardShortcut("s")
+                Divider()
+                Button("Close File") { store.closeCurrent() }
+                    .keyboardShortcut("w")
+                Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+                    .keyboardShortcut("w", modifiers: [.command, .shift])
+            }
+            CommandGroup(replacing: .textEditing) {
+                Button("Find…") { store.performFind(.showFindInterface) }
+                    .keyboardShortcut("f")
+                Button("Find and Replace…") { store.performFind(.showReplaceInterface) }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                Button("Find Next") { store.performFind(.nextMatch) }
+                    .keyboardShortcut("g")
+                Button("Find Previous") { store.performFind(.previousMatch) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Use Selection for Find") { store.performFind(.setSearchString) }
+                    .keyboardShortcut("e")
+                Divider()
+                Button("Go to Line…") { store.promptGoToLine() }
+                    .keyboardShortcut("g", modifiers: .control)
+                Divider()
+                Button("Toggle Line Comment") { store.performEditorCommand(#selector(CodeTextView.toggleLineComment(_:))) }
+                    .keyboardShortcut("/")
+                Button("Delete Line") { store.performEditorCommand(#selector(CodeTextView.deleteLines(_:))) }
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                Button("Indent Line") { store.performEditorCommand(#selector(CodeTextView.indentLines(_:))) }
+                    .keyboardShortcut("]")
+                Button("Outdent Line") { store.performEditorCommand(#selector(CodeTextView.outdentLines(_:))) }
+                    .keyboardShortcut("[")
+                Button("Select Line") { store.performEditorCommand(#selector(CodeTextView.selectLineExtending(_:))) }
+                    .keyboardShortcut("l")
+                // ⌥↑ / ⌥↓ (move) and ⇧⌥↑ / ⇧⌥↓ (copy) are handled by the editor itself, so the terminal
+                // keeps those keys.
             }
             CommandGroup(replacing: .printItem) {} // frees ⌘P for Go to File
             CommandGroup(after: .pasteboard) {
@@ -48,6 +81,7 @@ struct SightlineApp: App {
                 ))
                 Button("Toggle Markdown Preview") { store.toggleMarkdownPreview() }
                     .keyboardShortcut("v", modifiers: [.command, .shift])
+                Toggle("Vim Mode", isOn: Binding(get: { store.vimMode }, set: { store.vimMode = $0 }))
                 Toggle("Show Line Blame", isOn: Binding(get: { store.showLineBlame }, set: { store.showLineBlame = $0 }))
                 Divider()
                 Button("Changes") { store.panel = .changes }
@@ -69,7 +103,7 @@ struct SightlineApp: App {
                 Button("Pull") { Task { await store.sync(.pull) } }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
                 Button("Push") { Task { await store.sync(.push) } }
-                    .keyboardShortcut("k", modifiers: [.command, .shift])
+                    .keyboardShortcut("p", modifiers: [.command, .option])
                 Divider()
                 Button("Toggle Reviewed") { store.toggleReviewedForSelected() }
                     .keyboardShortcut("v", modifiers: [.command, .option])

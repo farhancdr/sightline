@@ -66,6 +66,16 @@ struct ContentView: View {
             ToolbarItemGroup {
                 Button { store.showQuickOpen() } label: { Image(systemName: "magnifyingglass") }
                     .help("Go to File… (⌘P)")
+                Button { store.vimMode.toggle() } label: {
+                    Text("VIM")
+                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .foregroundStyle(store.vimMode ? Color.white : Color.ghMuted)
+                        .background(store.vimMode ? Color.ghAdded : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(store.vimMode ? Color.clear : Color.ghMuted, lineWidth: 1))
+                }
+                .help(store.vimMode ? "Vim mode is on. Click to turn it off." : "Turn on Vim mode in the editor")
                 Button { store.terminalVisible.toggle() } label: {
                     Image(systemName: store.terminalVisible ? "terminal.fill" : "terminal")
                 }
@@ -179,6 +189,9 @@ private struct FilePane: View {
             }
             Text(relative).font(.callout.monospaced()).lineLimit(1).truncationMode(.head)
             Text(editor.language.name).font(.caption).foregroundStyle(.secondary)
+            if let vimStatus = editor.vimStatus, !(store.markdownPreview && store.isMarkdownOpen) {
+                VimBadge(status: vimStatus)
+            }
             Spacer()
             if let toast = store.toast {
                 Label(toast, systemImage: "checkmark.circle.fill")
@@ -289,5 +302,28 @@ private struct DiffPane: View {
             referencePath: store.diffReferencePath,
             nav: nav
         )
+    }
+}
+
+/// Vim mode indicator / command line, e.g. "NORMAL", "INSERT", "VISUAL  d2", ":%s/foo/bar/g".
+private struct VimBadge: View {
+    let status: String
+
+    private var color: Color {
+        if status.hasPrefix("INSERT") { return .ghAdded }
+        if status.hasPrefix("VISUAL") || status.hasPrefix("V-LINE") { return .ghModified }
+        if status.hasPrefix(":") || status.hasPrefix("/") || status.hasPrefix("?") { return .ghText }
+        return .ghAccent
+    }
+
+    var body: some View {
+        Text(status)
+            .font(.caption.monospaced().weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            .foregroundStyle(color)
+            .help("Vim mode (View → Vim Mode)")
     }
 }

@@ -6,6 +6,45 @@ import AppKit
 final class CodeTextView: NSTextView {
     /// ⌘-click on an identifier.
     var onCommandClick: ((String) -> Void)?
+    /// Line comment token for ⌘/ ("//", "#", "--"), nil when the language has none.
+    var lineCommentToken: String?
+    /// Vim mode (nil when off).
+    var vim: VimEngine? { didSet { needsDisplay = true } }
+
+    // MARK: Vim key routing
+
+    /// Control keys (⌃r, ⌃d, ⌃o…) reach Vim before the app's menu shortcuts.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let vim, window?.firstResponder === self, event.modifierFlags.contains(.control),
+           !event.modifierFlags.contains(.command), vim.mode != .insert,
+           let key = VimKey.from(event, mode: vim.mode), vim.handle(key) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// Normal mode draws a block cursor over the character.
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        guard vim?.usesBlockCursor == true else { return super.drawInsertionPoint(in: rect, color: color, turnedOn: flag) }
+        var block = rect
+        block.size.width = blockCursorWidth
+        if flag {
+            color.withAlphaComponent(0.45).setFill()
+            block.fill()
+        } else {
+            setNeedsDisplay(block, avoidAdditionalLayout: true)
+        }
+    }
+
+    override func setNeedsDisplay(_ invalidRect: NSRect, avoidAdditionalLayout flag: Bool) {
+        var rect = invalidRect
+        if vim?.usesBlockCursor == true { rect.size.width += blockCursorWidth }
+        super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
+    }
+
+    private var blockCursorWidth: CGFloat {
+        ("m" as NSString).size(withAttributes: [.font: font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)]).width
+    }
 
     override func mouseDown(with event: NSEvent) {
         let modifiers = event.modifierFlags

@@ -10,6 +10,8 @@ final class EditorSession {
     let language: Language
     let message: String?
     private(set) var isDirty = false
+    /// "NORMAL", "INSERT  d2", ":wq"… when Vim mode is on.
+    private(set) var vimStatus: String?
 
     @ObservationIgnored let controller: EditorController?
     @ObservationIgnored private var savedText: String
@@ -30,6 +32,7 @@ final class EditorSession {
         controller?.referencePath = referencePath
         controller?.onReferenceCopied = onReferenceCopied
         controller?.onTextChange = { [weak self] in self?.updateDirty() }
+        controller?.onVimStatus = { [weak self] status in self?.vimStatus = status }
     }
 
     private func updateDirty() {
@@ -140,6 +143,7 @@ final class EditorController: NSObject, NSTextViewDelegate {
         self.ruler = ruler
 
         setInitialText(text)
+        configureLanguageEditing()
     }
 
     private func configureTextView() {
@@ -232,6 +236,35 @@ final class EditorController: NSObject, NSTextViewDelegate {
     /// "path:12" or "path:12-30".
     nonisolated static func reference(path: String, lines: ClosedRange<Int>) -> String {
         lines.count > 1 ? "\(path):\(lines.lowerBound)-\(lines.upperBound)" : "\(path):\(lines.lowerBound)"
+    }
+
+    // MARK: Vim
+
+    var onVimStatus: ((String?) -> Void)?
+    var onVimAction: ((VimEngine.Action) -> Void)?
+
+    var vimEnabled: Bool {
+        get { (textView as? CodeTextView)?.vim != nil }
+        set {
+            guard let codeView = textView as? CodeTextView, newValue != (codeView.vim != nil) else { return }
+            if newValue {
+                let engine = VimEngine(view: codeView)
+                engine.onStatus = { [weak self] in self?.onVimStatus?($0) }
+                engine.onAction = { [weak self] in self?.onVimAction?($0) }
+                codeView.vim = engine
+                onVimStatus?(engine.statusText)
+                // Normal mode starts on a character, not a selection.
+                codeView.setSelectedRange(NSRange(location: codeView.selectedRange().location, length: 0))
+            } else {
+                codeView.vim = nil
+                onVimStatus?(nil)
+            }
+        }
+    }
+
+    /// Wires the language's comment token for ⌘/.
+    func configureLanguageEditing() {
+        (textView as? CodeTextView)?.lineCommentToken = language.lineComments.first
     }
 
     /// ⌘-click on an identifier in the editor.
@@ -352,6 +385,7 @@ final class EditorController: NSObject, NSTextViewDelegate {
     // MARK: NSTextViewDelegate
 
     func textViewDidChangeSelection(_ notification: Notification) {
+        (textView as? CodeTextView)?.vim?.syncFromSelectionChange()
         updateBlameAnnotation()
     }
 

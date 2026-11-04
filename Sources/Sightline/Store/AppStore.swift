@@ -19,6 +19,7 @@ final class AppStore {
     private static let blameKey = "showLineBlame"
     private static let terminalSchemeKey = "terminalColorScheme"
     private static let markdownPreviewKey = "markdownPreview"
+    private static let vimKey = "vimMode"
     private static let terminalGPUKey = "terminalGPU"
     private static let maxParallelGit = 8
 
@@ -125,6 +126,13 @@ final class AppStore {
     private(set) var editor: EditorSession?
     /// In the Files panel, show the diff of the open file instead of the editor.
     var showDiffForOpenFile = false
+    /// Vim keys in the editor (View → Vim Mode).
+    var vimMode: Bool {
+        didSet {
+            UserDefaults.standard.set(vimMode, forKey: Self.vimKey)
+            editor?.controller?.vimEnabled = vimMode
+        }
+    }
     /// Rendered markdown in place of the editor for markdown files (⇧⌘V).
     var markdownPreview: Bool { didSet { UserDefaults.standard.set(markdownPreview, forKey: Self.markdownPreviewKey) } }
     var isMarkdownOpen: Bool { editor?.language.mode == .markdown && editor?.controller != nil }
@@ -199,6 +207,7 @@ final class AppStore {
         reviewed = UserDefaults.standard.dictionary(forKey: Self.reviewedKey) as? [String: [String: String]] ?? [:]
         showLineBlame = UserDefaults.standard.object(forKey: Self.blameKey) as? Bool ?? true
         markdownPreview = UserDefaults.standard.bool(forKey: Self.markdownPreviewKey)
+        vimMode = UserDefaults.standard.bool(forKey: Self.vimKey)
         terminalColorScheme = TerminalManager.ColorScheme(
             rawValue: UserDefaults.standard.string(forKey: Self.terminalSchemeKey) ?? ""
         ) ?? .dark
@@ -581,6 +590,73 @@ final class AppStore {
         openInEditor(repoRelativePath: String(path.dropFirst(repo.path.count + 1)))
     }
 
+    // MARK: Vim actions
+
+    private func handleVimAction(_ action: VimEngine.Action, path: String) {
+        switch action {
+        case .save: saveEditor()
+        case .close: closeCurrent()
+        case .saveAndClose:
+            saveEditor()
+            closeCurrent()
+        case .jumpBack: navigateBack()
+        case .jumpForward: navigateForward()
+        case let .searchWord(word): searchSymbol(word, fromFile: path)
+        }
+    }
+
+    // MARK: Close / go to line
+
+    /// ⌘W: closes what the detail area shows (open file, selected diff, commit file). Never the window.
+    func closeCurrent() {
+        switch panel {
+        case .files, .search:
+            guard editor != nil, confirmLeavingEditor() else { return NSSound.beep() }
+            fileTask?.cancel()
+            editor = nil
+            showDiffForOpenFile = false
+            explorer?.selectedPath = nil // so clicking the same file reopens it
+        case .changes:
+            guard selectedFileID != nil else { return NSSound.beep() }
+            selectedFileID = nil
+        case .history:
+            guard selectedCommitFileID != nil else { return NSSound.beep() }
+            selectCommitFile(nil)
+        }
+    }
+
+    /// ⌃G: "line" or "line:column".
+    func promptGoToLine() {
+        guard let controller = editor?.controller, panel == .files || panel == .search else { return NSSound.beep() }
+        let alert = NSAlert()
+        alert.messageText = "Go to Line"
+        let lines = controller.text.reduce(into: 1) { count, character in if character == "\n" { count += 1 } }
+        alert.informativeText = "Line (1–\(lines)), optionally :column"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.placeholderString = "e.g. 120 or 120:5"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Go")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let parts = field.stringValue.split(separator: ":").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        guard let line = parts.first, line > 0 else { return }
+        recordJump()
+        controller.reveal(line: min(line, lines), column: parts.count > 1 ? max(1, parts[1]) : 1)
+    }
+
+    /// Find-bar actions (⌘F, ⌘G, ⇧⌘G, ⌥⌘F, ⌘E) for whichever text view has focus.
+    func performFind(_ action: NSTextFinder.Action) {
+        let sender = NSMenuItem()
+        sender.tag = action.rawValue
+        NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: sender)
+    }
+
+    /// Editing commands go to the focused editor through the responder chain (no-op elsewhere).
+    func performEditorCommand(_ selector: Selector) {
+        NSApp.sendAction(selector, to: nil, from: nil)
+    }
+
     // MARK: Navigation history
 
     private var currentLocation: NavLocation? {
@@ -803,6 +879,8 @@ final class AppStore {
                let repo = reposByDepth.first(where: { path.hasPrefix($0.path + "/") }) {
                 controller.blameEnabled = showLineBlame
                 controller.onCommandClick = { [weak self] word in self?.searchSymbol(word, fromFile: path) }
+                controller.onVimAction = { [weak self] action in self?.handleVimAction(action, path: path) }
+                controller.vimEnabled = vimMode
                 controller.blameContext = EditorController.BlameContext(
                     repoPath: repo.path,
                     relativePath: String(path.dropFirst(repo.path.count + 1)),

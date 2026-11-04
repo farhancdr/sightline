@@ -66,7 +66,12 @@ So Sightline does just those things, quickly.
   (VS Code, Cursor, Windsurf, Zed, Sublime Text, Xcode), or reveal in Finder.
 
 **Just enough to fix things by hand**
-- File explorer with git status colors, a plain-text editor (syntax highlighting, find, auto-indent, ⌘S).
+- File explorer with git status colors, and a plain-text editor with VS Code's everyday keys: find/replace, go to
+  line, toggle comment, move/copy/delete lines, indent/outdent, select line, auto-indent, ⌘S.
+- **Vim mode** (View → Vim Mode): Normal / Insert / Visual / Visual-line, counts, `d c y > < gu gU` with motions
+  (`w b e 0 ^ $ gg G f t ; , % { } n N`) and text objects (`iw aw i" a" i( a{ ip`…), `x X s S r J p P o O ~`,
+  `u` / `⌃r`, `.`, `/ ? * #`, `:w :q :wq :x ZZ :<line> :s :%s`, `⌃d ⌃u`, `⌃o ⌃i` (back / forward) and
+  `gd` (search the repo for the word). The mode shows in the file header.
 - **Markdown preview** (⇧⌘V, or the eye icon): GitHub-styled, with highlighted code blocks and
   **Mermaid diagrams rendered as pictures**. Handy for the plans and design notes agents write; it refreshes when
   the agent edits the file.
@@ -123,8 +128,17 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 | ⇧⌘E | Open the file's repo in your editor, at the file and caret line |
 | ⌘-click | Search the repo for that name (exact case, whole word, same language) |
 | ⌥⌘R | Reveal in Finder |
-| ⇧⌘L / ⇧⌘K | Pull / Push |
+| ⇧⌘L / ⌥⌘P | Pull / Push |
 | ⌘S | Save file |
+| ⌘W / ⇧⌘W | Close the open file (or diff) / close the window |
+| ⌘F, ⌥⌘F, ⌘G, ⇧⌘G, ⌘E | Find, replace, next, previous, use selection for find |
+| ⌃G | Go to line (`120` or `120:5`) |
+| ⌘/ | Toggle line comment |
+| ⌥↑ / ⌥↓ | Move line(s) up / down |
+| ⇧⌥↑ / ⇧⌥↓ | Copy line(s) up / down |
+| ⇧⌘K | Delete line(s) |
+| ⌘] / ⌘[ (or Tab / ⇧Tab on a selection) | Indent / outdent |
+| ⌘L | Select line (repeat to extend) |
 | ⇧⌘V | Markdown preview ↔ source |
 | ⌘F | Find in file |
 | ⇧⌘T | Cycle theme (System → Light → Dark) |
