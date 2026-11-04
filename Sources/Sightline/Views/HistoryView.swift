@@ -21,6 +21,7 @@ enum RelativeDate {
 /// Middle column in the History panel: the commit list of the selected repo.
 struct HistoryList: View {
     let store: AppStore
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         if store.commits.isEmpty {
@@ -34,6 +35,7 @@ struct HistoryList: View {
             List(selection: Binding(get: { store.selectedCommitID }, set: { store.selectCommit($0) })) {
                 ForEach(store.commits) { commit in
                     CommitRow(commit: commit, isUnpushed: store.unpushedCommits.contains(commit.sha))
+                        .rowHighlight(selected: store.selectedCommitID == commit.sha, listFocused: listFocused)
                         .tag(commit.sha)
                         .onAppear {
                             if commit.sha == store.commits.last?.sha { store.loadMoreHistory() }
@@ -49,21 +51,21 @@ struct HistoryList: View {
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
+            .focused($listFocused)
         }
     }
 }
 
 private struct CommitRow: View {
-    @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.rowHighlight) private var highlight
     let commit: CommitInfo
     let isUnpushed: Bool
 
     var body: some View {
-        let selected = prominence == .increased
         VStack(alignment: .leading, spacing: 3) {
             Text(commit.subject)
                 .lineLimit(2)
-                .foregroundStyle(Color.ghText.onSelection(selected))
+                .foregroundStyle(Color.ghText.onSelection(highlight))
             HStack(spacing: 5) {
                 Text(commit.author).lineLimit(1)
                 Text("·")
@@ -72,15 +74,15 @@ private struct CommitRow: View {
                 if isUnpushed {
                     Text("↑ unpushed")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color.ghAccent.onSelection(selected))
+                        .foregroundStyle(Color.ghAccent.onSelection(highlight))
                         .help("Not on the upstream branch yet")
                 }
                 Text(commit.shortSha).font(.caption.monospaced())
             }
             .font(.caption)
-            .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.85))
+            .foregroundStyle(Color.ghSecondary(highlight, opacity: 0.85))
             if !commit.refs.isEmpty {
-                RefLabels(refs: commit.refs, onSelection: selected)
+                RefLabels(refs: commit.refs, onSelection: highlight == .accent)
             }
         }
         .padding(.vertical, 3)
@@ -101,8 +103,8 @@ private struct RefLabels: View {
                     .lineLimit(1)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(color(ref).onSelection(onSelection).opacity(onSelection ? 0.22 : 0.14), in: Capsule())
-                    .foregroundStyle(color(ref).onSelection(onSelection))
+                    .background((onSelection ? Color.white : color(ref)).opacity(onSelection ? 0.22 : 0.14), in: Capsule())
+                    .foregroundStyle(onSelection ? Color.white : color(ref))
             }
         }
     }
@@ -229,44 +231,47 @@ private struct CommitHeader: View {
 
 private struct CommitFileList: View {
     let store: AppStore
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         List(selection: Binding(get: { store.selectedCommitFileID }, set: { store.selectCommitFile($0) })) {
             ForEach(store.commitFiles) { file in
-                CommitFileRow(file: file).tag(file.id)
+                CommitFileRow(file: file)
+                    .rowHighlight(selected: store.selectedCommitFileID == file.id, listFocused: listFocused)
+                    .tag(file.id)
             }
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
+        .focused($listFocused)
     }
 }
 
 private struct CommitFileRow: View {
-    @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.rowHighlight) private var highlight
     let file: CommitFile
 
     var body: some View {
-        let selected = prominence == .increased
         HStack(spacing: 6) {
             Image(systemName: FileIcon.symbol(for: file.fileName))
                 .font(.caption)
-                .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.9))
+                .foregroundStyle(Color.ghSecondary(highlight, opacity: 0.9))
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 0) {
                 Text(file.fileName)
                     .lineLimit(1)
                     .strikethrough(file.code == "D")
-                    .foregroundStyle(Color.ghText.onSelection(selected))
+                    .foregroundStyle(Color.ghText.onSelection(highlight))
                 Text(file.originalPath.map { "← \($0)" } ?? file.directory)
                     .font(.caption)
-                    .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.85))
+                    .foregroundStyle(Color.ghSecondary(highlight, opacity: 0.85))
                     .lineLimit(1)
                     .truncationMode(.head)
             }
             Spacer(minLength: 4)
             Text(String(file.code))
                 .font(.caption.monospaced().weight(.bold))
-                .foregroundStyle((Color.ghStatus(file.code) ?? .ghModified).onSelection(selected))
+                .foregroundStyle((Color.ghStatus(file.code) ?? .ghModified).onSelection(highlight))
         }
         .help(file.path)
     }

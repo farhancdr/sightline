@@ -1114,3 +1114,13 @@ final class VimKeyRoutingTests: XCTestCase {
         XCTAssertNil(VimKey.from(try key("s", code: 1, flags: .command), mode: .normal), "⌘ shortcuts stay with the app")
     }
 }
+
+final class RowHighlightTests: XCTestCase {
+    func testHighlightFollowsSelectionFocusAndWindow() {
+        XCTAssertEqual(RowHighlight(selected: false, listFocused: true, windowActive: true), .none)
+        XCTAssertEqual(RowHighlight(selected: true, listFocused: true, windowActive: true), .accent)
+        XCTAssertEqual(RowHighlight(selected: true, listFocused: false, windowActive: true), .gray)
+        XCTAssertEqual(RowHighlight(selected: true, listFocused: true, windowActive: false), .gray)
+        XCTAssertEqual(RowHighlight(selected: true, listFocused: false, windowActive: false, prominence: .increased), .accent)
+    }
+}

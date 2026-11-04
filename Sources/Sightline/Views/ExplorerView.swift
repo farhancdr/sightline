@@ -5,6 +5,7 @@ import SwiftUI
 struct ExplorerView: View {
     let store: AppStore
     let explorer: ExplorerModel
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         let decorations = Decorations(status: store.selectedStatus)
@@ -32,6 +33,7 @@ struct ExplorerView: View {
                             toggle: { explorer.toggle(row.node) },
                             copyPath: { copy(rootRelative(row.node)) }
                         )
+                        .rowHighlight(selected: explorer.selectedPath == row.id, listFocused: listFocused)
                         .tag(row.id)
                         .id(row.id)
                         .contextMenu {
@@ -48,6 +50,7 @@ struct ExplorerView: View {
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
+                .focused($listFocused)
                 .environment(\.defaultMinListRowHeight, 22)
                 .onChange(of: explorer.selectedPath) { _, path in
                     guard let path else { return }
@@ -95,7 +98,7 @@ private struct Decorations {
 }
 
 private struct ExplorerRowView: View {
-    @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.rowHighlight) private var highlight
     let row: ExplorerRow
     let decoration: Character?
     let toggle: () -> Void
@@ -106,27 +109,26 @@ private struct ExplorerRowView: View {
     private var color: Color? { Color.ghStatus(decoration == "•" ? "M" : decoration) }
 
     var body: some View {
-        let selected = prominence == .increased
         HStack(spacing: 4) {
             Color.clear.frame(width: CGFloat(row.depth) * 12, height: 1)
             if row.node.isDirectory {
                 Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.9))
+                    .foregroundStyle(Color.ghSecondary(highlight, opacity: 0.9))
                     .frame(width: 12)
                     .contentShape(Rectangle())
                     .onTapGesture(perform: toggle)
                 Image(systemName: row.isExpanded ? "folder.fill" : "folder")
-                    .foregroundStyle(Color.ghFolder.onSelection(selected))
+                    .foregroundStyle(Color.ghFolder.onSelection(highlight))
             } else {
                 Color.clear.frame(width: 12, height: 1)
                 Image(systemName: FileIcon.symbol(for: row.node.name))
-                    .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.9))
+                    .foregroundStyle(Color.ghSecondary(highlight, opacity: 0.9))
             }
             Text(row.node.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle((color ?? .ghText).onSelection(selected))
+                .foregroundStyle((color ?? .ghText).onSelection(highlight))
             Spacer(minLength: 4)
             if hovering || copied {
                 Button {
@@ -134,10 +136,13 @@ private struct ExplorerRowView: View {
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
                 } label: {
+                    // A solid chip so the icon reads on the gray and accent selection fills alike.
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 10))
-                        .foregroundStyle((copied ? Color.ghAdded : Color.ghMuted).onSelection(selected))
-                        .frame(width: 18, height: 16)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(copied ? Color.ghAdded : Color.ghText)
+                        .frame(width: 20, height: 17)
+                        .background(Color.ghCanvas, in: RoundedRectangle(cornerRadius: 4))
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.ghBorder))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
@@ -146,9 +151,9 @@ private struct ExplorerRowView: View {
             if let decoration, !row.node.isDirectory {
                 Text(String(decoration == "?" ? "U" : decoration))
                     .font(.caption.monospaced().weight(.bold))
-                    .foregroundStyle((color ?? .ghMuted).onSelection(selected))
+                    .foregroundStyle((color ?? .ghMuted).onSelection(highlight))
             } else if decoration != nil {
-                Circle().fill((color ?? .ghModified).onSelection(selected)).frame(width: 6, height: 6)
+                Circle().fill((color ?? .ghModified).onSelection(highlight)).frame(width: 6, height: 6)
             }
         }
         .opacity(row.isIgnored ? 0.45 : 1)

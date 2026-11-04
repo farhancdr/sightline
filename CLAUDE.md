@@ -70,6 +70,10 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   Interactive zsh ignores SIGTERM: send SIGHUP after `terminate()`.
 - **SwiftUI TextField + `.onKeyPress` in an overlay** stopped updating its binding after the first keystroke.
   The ⌘P palette uses `PaletteSearchField` (NSTextField + delegate commands) instead.
+- **Selected-row colors:** `backgroundProminence` stays `.standard` on sidebar-style lists even when the row
+  is drawn with the accent fill. Each list keeps `@FocusState listFocused` (`.focused` on the List) and rows
+  use `.rowHighlight(selected:listFocused:)`; row views read `\.rowHighlight` (`.none/.gray/.accent`) and color
+  via `onSelection(_:)` / `Color.ghSecondary(_:)`.
 - **Menu shortcuts:** don't put `.disabled(...)` on Commands that depend on `@Observable` state; menus may not
   re-evaluate. Make the action a no-op instead.
 - **Text views:** TextKit 1 (`NSTextView(frame:textContainer:)`) with a 1e7-wide container for horizontal

@@ -5,6 +5,7 @@ import SwiftUI
 struct SearchPanel: View {
     @Bindable var store: AppStore
     @FocusState private var queryFocused: Bool
+    @FocusState private var listFocused: Bool
     @State private var showFilters = false
     @State private var collapsed: Set<String> = []
     @State private var selectedMatchID: String?
@@ -129,7 +130,9 @@ struct SearchPanel: View {
                 Section {
                     if !collapsed.contains(file.id) {
                         ForEach(file.matches) { match in
-                            MatchRow(match: match).tag(match.id)
+                            MatchRow(match: match)
+                                .rowHighlight(selected: selectedMatchID == match.id, listFocused: listFocused)
+                                .tag(match.id)
                         }
                     }
                 } header: {
@@ -141,6 +144,7 @@ struct SearchPanel: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+        .focused($listFocused)
         .environment(\.defaultMinListRowHeight, 20)
     }
 
@@ -227,16 +231,14 @@ private struct FileHeader: View {
 }
 
 private struct MatchRow: View {
-    @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.rowHighlight) private var highlight
     let match: SearchMatch
 
-    private var selected: Bool { prominence == .increased }
-
-    var body: some View {
+        var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("\(match.line)")
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(Color.ghMuted.onSelection(selected, opacity: 0.85))
+                .foregroundStyle(Color.ghSecondary(highlight, opacity: 0.85))
                 .frame(minWidth: 26, alignment: .trailing)
             Text(highlighted)
                 .font(.system(size: 12, design: .monospaced))
@@ -248,13 +250,13 @@ private struct MatchRow: View {
 
     private var highlighted: AttributedString {
         var string = AttributedString(match.text)
-        string.foregroundColor = Color.ghText.onSelection(selected)
+        string.foregroundColor = Color.ghText.onSelection(highlight)
         let ns = match.text as NSString
         for range in match.ranges where NSMaxRange(range) <= ns.length {
             guard let swiftRange = Range(range, in: match.text),
                   let lower = AttributedString.Index(swiftRange.lowerBound, within: string),
                   let upper = AttributedString.Index(swiftRange.upperBound, within: string) else { continue }
-            string[lower..<upper].backgroundColor = selected ? Color.white.opacity(0.28) : Color.ghModified.opacity(0.28)
+            string[lower..<upper].backgroundColor = highlight == .accent ? Color.white.opacity(0.28) : Color.ghModified.opacity(0.28)
             string[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
         }
         return string

@@ -71,10 +71,70 @@ extension Color {
     }
 }
 
+/// How a list draws a row's selection. A focused list fills the selected row with the accent color
+/// (text must turn white); an unfocused list or inactive window uses a gray pill (keep colors, but
+/// muted text needs more contrast).
+///
+/// Derived from our own selection + focus state: `backgroundProminence` stays `.standard` on macOS
+/// sidebar-style lists even when the row is drawn with the accent fill.
+enum RowHighlight: Equatable {
+    case none, gray, accent
+
+    init(selected: Bool, listFocused: Bool, windowActive: Bool, prominence: BackgroundProminence = .standard) {
+        if !selected {
+            self = .none
+        } else if prominence == .increased || (listFocused && windowActive) {
+            self = .accent
+        } else {
+            self = .gray
+        }
+    }
+}
+
+private struct RowHighlightKey: EnvironmentKey {
+    static let defaultValue = RowHighlight.none
+}
+
+extension EnvironmentValues {
+    var rowHighlight: RowHighlight {
+        get { self[RowHighlightKey.self] }
+        set { self[RowHighlightKey.self] = newValue }
+    }
+}
+
+/// Sets `rowHighlight` for a row from its selection state and its list's focus.
+private struct RowHighlightModifier: ViewModifier {
+    @Environment(\.controlActiveState) private var activeState
+    @Environment(\.backgroundProminence) private var prominence
+    let selected: Bool
+    let listFocused: Bool
+
+    func body(content: Content) -> some View {
+        content.environment(\.rowHighlight, RowHighlight(
+            selected: selected, listFocused: listFocused,
+            windowActive: activeState != .inactive, prominence: prominence))
+    }
+}
+
+extension View {
+    /// Apply to each list row (with the list's `.focused` state) so its colors match the selection fill.
+    func rowHighlight(selected: Bool, listFocused: Bool) -> some View {
+        modifier(RowHighlightModifier(selected: selected, listFocused: listFocused))
+    }
+}
+
 extension Color {
-    /// On a selected row (the list draws the accent fill: `backgroundProminence == .increased`) custom colors
-    /// lose contrast, so use white there.
-    func onSelection(_ selected: Bool, opacity: Double = 1) -> Color {
-        selected ? Color.white.opacity(opacity) : self
+    /// On the accent selection fill custom colors lose contrast, so use white there.
+    func onSelection(_ highlight: RowHighlight, opacity: Double = 1) -> Color {
+        highlight == .accent ? Color.white.opacity(opacity) : self
+    }
+
+    /// Secondary row text: muted normally, stronger on the gray selection pill, white on the accent fill.
+    static func ghSecondary(_ highlight: RowHighlight, opacity: Double = 0.85) -> Color {
+        switch highlight {
+        case .none: .ghMuted
+        case .gray: .ghText.opacity(0.78)
+        case .accent: .white.opacity(opacity)
+        }
     }
 }

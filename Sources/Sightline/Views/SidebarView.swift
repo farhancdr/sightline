@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var store: AppStore
     @FocusState private var filterFocused: Bool
+    @FocusState private var listFocused: Bool
 
     private var groups: [(name: String, repos: [Repo])] {
         let repos = store.filteredRepos
@@ -30,6 +31,7 @@ struct SidebarView: View {
                                 status: store.statuses[repo.id],
                                 showFullPath: store.repoSort == .recent
                             )
+                            .rowHighlight(selected: store.selectedRepoID == repo.id, listFocused: listFocused)
                             .tag(repo.id)
                         }
                     }
@@ -37,6 +39,7 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .focused($listFocused)
             .overlay {
                 if store.isScanning {
                     ProgressView("Scanning…")
@@ -121,32 +124,31 @@ struct SidebarView: View {
 }
 
 private struct RepoRow: View {
-    @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.rowHighlight) private var highlight
     let repo: Repo
     let status: RepoStatus?
     var showFullPath = false
 
     var body: some View {
-        let selected = prominence == .increased
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(showFullPath && !repo.relativePath.isEmpty ? repo.relativePath : repo.name)
-                    .foregroundStyle(Color.ghText.onSelection(selected))
+                    .foregroundStyle(Color.ghText.onSelection(highlight))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let status {
                     Text(status.headLabel)
                         .font(.caption)
-                        .foregroundStyle((status.isDetached ? Color.ghConflict : Color.ghMuted).onSelection(selected, opacity: 0.85))
+                        .foregroundStyle(status.isDetached ? Color.ghConflict.onSelection(highlight, opacity: 0.85) : Color.ghSecondary(highlight))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
             }
             Spacer(minLength: 4)
             if let status {
-                if status.behind > 0 { Badge(text: "↓\(status.behind)", color: Color.ghModified.onSelection(selected)) }
-                if status.ahead > 0 { Badge(text: "↑\(status.ahead)", color: Color.ghAccent.onSelection(selected)) }
-                if status.changedCount > 0 { Badge(text: "\(status.changedCount)", color: Color.ghMuted.onSelection(selected)) }
+                if status.behind > 0 { Badge(text: "↓\(status.behind)", color: Color.ghModified.onSelection(highlight)) }
+                if status.ahead > 0 { Badge(text: "↑\(status.ahead)", color: Color.ghAccent.onSelection(highlight)) }
+                if status.changedCount > 0 { Badge(text: "\(status.changedCount)", color: Color.ghMuted.onSelection(highlight)) }
             }
         }
         .padding(.vertical, 1)
