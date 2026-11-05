@@ -73,6 +73,15 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   16-color palette, so on the light theme fixed prompt colors (p10k 236/31/76/178) become dark-on-dark.
 - **SwiftUI TextField + `.onKeyPress` in an overlay** stopped updating its binding after the first keystroke.
   The ⌘P palette uses `PaletteSearchField` (NSTextField + delegate commands) instead.
+- **Tabs:** one bar across repos. `TabList` (pure, tested) holds order / active / preview; `AppStore.tabSessions`
+  holds the loaded `EditorSession`s and `editor` is the active one. The active tab always belongs to the
+  selected repo: activating another repo's tab selects that repo; selecting a repo restores
+  `lastActiveTab[repo]`; closing prefers the nearest tab of the same repo. Unsaved edits live in their tab,
+  so only closing it, quitting or opening another root asks to save. Preview rule: `path == preview &&
+  !isDirty`; the next preview open replaces it in place (⌘P and new files open pinned).
+  Tabs are `Button`s, and the tab bar's ScrollView sits in a VStack below a 1pt spacer: touching the pane's top
+  edge, SwiftUI stretched it under the toolbar and its clickable content ended up behind the toolbar (tabs drawn
+  but unclickable). `TabClickInWindowTests` clicks the tabs with real mouse events in the full layout.
 - **Selected-row colors:** `backgroundProminence` stays `.standard` on sidebar-style lists even when the row
   is drawn with the accent fill. Each list keeps `@FocusState listFocused` (`.focused` on the List) and rows
   use `.rowHighlight(selected:listFocused:)`; row views read `\.rowHighlight` (`.none/.gray/.accent`) and color
@@ -111,7 +120,7 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
 - **Editor keys:** line commands live in `CodeTextView+Editing.swift` and go through `shouldChangeText`/
   `didChangeText` (undoable, re-highlighted). ⌘ shortcuts are menu items that `sendAction` to the first responder
   (no-op unless the editor has focus); ⌥↑/⌥↓ are handled in `keyDown` so the terminal keeps them. ⌘W closes the
-  file/diff, never the window (⇧⌘W does). Check new shortcuts for collisions:
+  tab/diff, never the window (⇧⌘W does). Check new shortcuts for collisions:
   `grep -oE 'keyboardShortcut\("[^"]+"(, modifiers: [^)]*\))?' Sources/Sightline/App/SightlineApp.swift | sort | uniq -d`.
 - **Vim mode:** `VimEngine` (Editor/VimEngine.swift) is attached to `CodeTextView.vim` when View → Vim Mode is
   on. Keys reach it from `keyDown` (and `performKeyEquivalent` for ⌃ keys, so Vim beats the menus); ⌘ keys never

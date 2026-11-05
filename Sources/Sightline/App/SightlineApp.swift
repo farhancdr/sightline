@@ -36,6 +36,14 @@ struct SightlineApp: App {
                     .keyboardShortcut("w")
                 Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
                     .keyboardShortcut("w", modifiers: [.command, .shift])
+                Divider()
+                Button("Next Tab") { store.cycleTab(1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                Button("Previous Tab") { store.cycleTab(-1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                Button("Switch to Next Tab") { store.cycleTab(1) }
+                    .keyboardShortcut(.tab, modifiers: [.control])
+                Button("Close All Tabs") { store.closeAllTabs() }
             }
             CommandGroup(replacing: .textEditing) {
                 Button("Find…") { store.performFind(.showFindInterface) }

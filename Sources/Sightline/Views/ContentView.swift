@@ -152,6 +152,7 @@ private struct FilePane: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !store.tabList.isEmpty { EditorTabBar(store: store) }
             if let editor = store.editor, let repo = store.selectedRepo, editor.path.hasPrefix(repo.path + "/") {
                 let relative = String(editor.path.dropFirst(repo.path.count + 1))
                 let change = store.change(forRelativePath: relative)

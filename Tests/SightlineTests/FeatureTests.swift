@@ -1209,3 +1209,122 @@ final class SplitDividerTests: XCTestCase {
         XCTAssertEqual(SplitDiffView.clampFraction(0.3), 0.3)
     }
 }
+
+final class TabListTests: XCTestCase {
+    func testPreviewReplacementPinningAndOrder() {
+        var tabs = TabList()
+        tabs.open("/r/a", asPreview: true)
+        XCTAssertEqual(tabs.preview, "/r/a")
+        // Next preview open replaces the preview in place.
+        XCTAssertEqual(tabs.open("/r/b", asPreview: true), "/r/a")
+        XCTAssertEqual(tabs.paths, ["/r/b"])
+        // A dirty preview is kept; the new one opens to its right.
+        XCTAssertNil(tabs.open("/r/c", asPreview: true, previewIsDirty: true))
+        XCTAssertEqual(tabs.paths, ["/r/b", "/r/c"])
+        XCTAssertEqual(tabs.preview, "/r/c")
+        // Pinned (non-preview) open keeps the old preview and opens right of the active tab.
+        tabs.activate("/r/b")
+        XCTAssertNil(tabs.open("/r/d", asPreview: false))
+        XCTAssertEqual(tabs.paths, ["/r/b", "/r/d", "/r/c"])
+        XCTAssertEqual(tabs.active, "/r/d")
+        // Re-opening an existing preview tab pinned keeps it.
+        tabs.open("/r/c", asPreview: false)
+        XCTAssertNil(tabs.preview)
+        XCTAssertEqual(tabs.paths.count, 3)
+    }
+
+    func testCloseActivatesNeighborAndCycleWraps() {
+        var tabs = TabList()
+        for path in ["/a", "/b", "/c"] { tabs.open(path, asPreview: false) }
+        XCTAssertEqual(tabs.paths, ["/a", "/b", "/c"])
+        XCTAssertEqual(tabs.neighbor(1), "/a", "wraps from the last tab")
+        XCTAssertEqual(tabs.neighbor(-1), "/b")
+        tabs.activate("/b")
+        XCTAssertEqual(tabs.close("/b"), "/c", "right neighbor first")
+        XCTAssertEqual(tabs.close("/c"), "/a", "then left")
+        XCTAssertNil(tabs.close("/a"))
+        XCTAssertTrue(tabs.isEmpty)
+
+        for path in ["/a", "/b", "/c", "/d"] { tabs.open(path, asPreview: false) }
+        XCTAssertEqual(tabs.others(than: "/b"), ["/a", "/c", "/d"])
+        XCTAssertEqual(tabs.right(of: "/b"), ["/c", "/d"])
+        tabs.activate("/a")
+        tabs.close("/c") // closing an inactive tab keeps the active one
+        XCTAssertEqual(tabs.active, "/a")
+    }
+}
+
+final class TabListAcrossReposTests: XCTestCase {
+    func testCloseStaysInSameRepoAndSetActive() {
+        var tabs = TabList()
+        for path in ["/r1/a", "/r2/x", "/r1/b", "/r2/y"] { tabs.open(path, asPreview: false) }
+        let inR1: (String) -> Bool = { $0.hasPrefix("/r1/") }
+        tabs.activate("/r1/a")
+        // Right neighbor is r2/x; the nearest r1 tab to the right wins.
+        XCTAssertEqual(tabs.close("/r1/a", preferring: inR1), "/r1/b")
+        XCTAssertEqual(tabs.close("/r1/b", preferring: inR1), nil, "no r1 tab left → none active")
+        XCTAssertEqual(tabs.paths, ["/r2/x", "/r2/y"])
+        tabs.setActive("/r2/y")
+        XCTAssertEqual(tabs.active, "/r2/y")
+        tabs.setActive("/nope")
+        XCTAssertEqual(tabs.active, "/r2/y", "unknown paths are ignored")
+        tabs.setActive(nil)
+        XCTAssertNil(tabs.active)
+    }
+}
+
+/// The two-repo flow end to end on the real store: open in A, ⌘P into B, switch tabs, close.
+@MainActor
+final class TabsAcrossReposStoreTests: XCTestCase {
+    private func waitFor(_ condition: () -> Bool) async {
+        for _ in 0..<100 where !condition() { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+
+    func testTabsFollowRepos() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-tabs-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        for name in ["alpha", "beta"] {
+            try FileManager.default.createDirectory(atPath: "\(root)/\(name)", withIntermediateDirectories: true)
+            _ = try await Git.run(["init", "-q"], in: "\(root)/\(name)")
+            try "\(name)\n".write(toFile: "\(root)/\(name)/file.txt", atomically: true, encoding: .utf8)
+        }
+        let store = AppStore.shared
+        await store.open(root: root)
+        let alpha = try XCTUnwrap(store.repos.first { $0.name == "alpha" })
+        let beta = try XCTUnwrap(store.repos.first { $0.name == "beta" })
+        let alphaFile = alpha.path + "/file.txt"
+        let betaFile = beta.path + "/file.txt"
+
+        store.selectRepo(alpha.id)
+        store.openInEditor(repoRelativePath: "file.txt") // preview, like a click in the explorer
+        await waitFor { store.editor?.path == alphaFile }
+        XCTAssertEqual(store.tabList.paths, [alphaFile])
+
+        // ⌘P into the other repo: a new tab, not a replacement.
+        store.openQuickOpenEntry(QuickOpenEntry(repo: beta, repoRelativePath: "file.txt"))
+        await waitFor { store.editor?.path == betaFile }
+        XCTAssertEqual(store.tabList.paths, [alphaFile, betaFile])
+        XCTAssertEqual(store.selectedRepoID, beta.id)
+
+        // Clicking alpha's tab selects alpha.
+        store.activateTab(alphaFile)
+        XCTAssertEqual(store.selectedRepoID, alpha.id)
+        XCTAssertEqual(store.editor?.path, alphaFile)
+
+        // Selecting beta in the sidebar shows beta's file again.
+        store.selectRepo(beta.id)
+        XCTAssertEqual(store.editor?.path, betaFile)
+
+        // Closing beta's only tab stays in beta with nothing open, and reselecting doesn't reopen it.
+        store.closeTabs([betaFile])
+        XCTAssertEqual(store.selectedRepoID, beta.id)
+        XCTAssertNil(store.editor)
+        XCTAssertEqual(store.tabList.paths, [alphaFile])
+        store.selectRepo(alpha.id)
+        store.selectRepo(beta.id)
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(store.editor)
+        XCTAssertEqual(store.tabList.paths, [alphaFile])
+        store.closeAllTabs()
+    }
+}

@@ -17,6 +17,7 @@ final class CodeTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if let vim, window?.firstResponder === self, event.modifierFlags.contains(.control),
            !event.modifierFlags.contains(.command), vim.mode != .insert,
+           event.keyCode != 48, // ⌃Tab / ⌃⇧Tab switch editor tabs (menu)
            let key = VimKey.from(event, mode: vim.mode), vim.handle(key) {
             return true
         }

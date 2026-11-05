@@ -128,14 +128,29 @@ final class AppStore {
         didSet { if panel == .history { loadHistoryIfNeeded() } }
     }
     private(set) var explorer: ExplorerModel?
-    private(set) var editor: EditorSession?
+    /// Open-file tabs across all repos. The active tab always belongs to the selected repo (or there is none):
+    /// activating another repo's tab selects that repo.
+    private(set) var tabList = TabList()
+    /// Loaded sessions of the open tabs, by path.
+    private(set) var tabSessions: [String: EditorSession] = [:]
+    /// repo id → the tab last active in it, restored when the repo is selected again.
+    @ObservationIgnored private var lastActiveTab: [String: String] = [:]
+    @ObservationIgnored private var fileTasks: [String: Task<Void, Never>] = [:]
+    /// The active tab's session.
+    var editor: EditorSession? { tabList.active.flatMap { tabSessions[$0] } }
+    var tabs: [EditorSession] { tabList.paths.compactMap { tabSessions[$0] } }
+    /// Every open session in every repo (unsaved-changes checks, settings changes).
+    private var allSessions: [EditorSession] { Array(tabSessions.values) }
+
+    /// The innermost repo containing `path`.
+    func repo(forPath path: String) -> Repo? { reposByDepth.first { path.hasPrefix($0.path + "/") } }
     /// In the Files panel, show the diff of the open file instead of the editor.
     var showDiffForOpenFile = false
     /// Vim keys in the editor (View → Vim Mode).
     var vimMode: Bool {
         didSet {
             UserDefaults.standard.set(vimMode, forKey: Self.vimKey)
-            editor?.controller?.vimEnabled = vimMode
+            for session in allSessions { session.controller?.vimEnabled = vimMode }
         }
     }
     /// Rendered markdown in place of the editor for markdown files (⇧⌘V).
@@ -145,7 +160,7 @@ final class AppStore {
     var showLineBlame: Bool {
         didSet {
             UserDefaults.standard.set(showLineBlame, forKey: Self.blameKey)
-            editor?.controller?.blameEnabled = showLineBlame
+            for session in allSessions { session.controller?.blameEnabled = showLineBlame }
         }
     }
     /// Short confirmation shown in the file header ("Copied path:12-30").
@@ -195,7 +210,6 @@ final class AppStore {
     @ObservationIgnored private var pendingWatchRepos: Set<String> = []
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var diffTask: Task<Void, Never>?
-    @ObservationIgnored private var fileTask: Task<Void, Never>?
     @ObservationIgnored private var diffLineLimit: Int? = DiffDocument.defaultRowLimit
     @ObservationIgnored private var explorers: [String: ExplorerModel] = [:]
     /// Repos sorted longest path first, for mapping a changed file to its innermost repo.
@@ -271,6 +285,11 @@ final class AppStore {
         UserDefaults.standard.set(root, forKey: Self.rootKey)
         rootPath = RepoScanner.resolvedRoot(root)
         explorers.removeAll()
+        fileTasks.values.forEach { $0.cancel() }
+        fileTasks.removeAll()
+        lastActiveTab.removeAll()
+        tabList = TabList()
+        tabSessions = [:]
         recentFiles.removeAll()
         await rescan()
     }
@@ -282,6 +301,10 @@ final class AppStore {
         repos = found
         reposByDepth = found.sorted { $0.path.count > $1.path.count }
         statuses = statuses.filter { key, _ in found.contains { $0.id == key } }
+        for path in tabList.paths where repo(forPath: path) == nil { // repo gone
+            tabList.close(path)
+            tabSessions[path] = nil
+        }
         isScanning = false
         if selectedRepoID == nil || !found.contains(where: { $0.id == selectedRepoID }) {
             selectedRepoID = nil
@@ -298,7 +321,16 @@ final class AppStore {
 
     /// `recordOpen`: counts toward "Most Opened" (user picks, not the automatic launch selection).
     func selectRepo(_ id: String?, recordOpen: Bool = true) {
-        guard id != selectedRepoID, confirmLeavingEditor() else { return }
+        guard id != selectedRepoID else { return }
+        fileTasks.values.forEach { $0.cancel() }
+        fileTasks.removeAll()
+        // Every repo's tabs stay in the bar; show the file last active in the new repo (if any).
+        if let id, tabList.active.flatMap({ repo(forPath: $0)?.id }) != id {
+            let remembered = lastActiveTab[id].flatMap { tabList.contains($0) ? $0 : nil }
+            tabList.setActive(remembered ?? tabList.paths.last { repo(forPath: $0)?.id == id })
+        } else if id == nil {
+            tabList.setActive(nil)
+        }
         selectedRepoID = id
         if let id {
             UserDefaults.standard.set(id, forKey: Self.lastRepoKey)
@@ -307,8 +339,6 @@ final class AppStore {
         selectedFileID = nil
         diff = nil
         diffTask?.cancel()
-        fileTask?.cancel()
-        editor = nil
         showDiffForOpenFile = false
         resetHistory()
         guard let repo = selectedRepo else {
@@ -320,7 +350,9 @@ final class AppStore {
         explorer = model
         if panel == .history { loadHistoryIfNeeded() }
         if panel == .search, !searchOptions.allRepos, !searchQuery.isEmpty { scheduleSearch(immediately: true) }
-        if let path = model.selectedPath, FileManager.default.fileExists(atPath: path),
+        if let active = tabList.active {
+            model.reveal(relativePath: String(active.dropFirst(repo.path.count + 1)))
+        } else if let path = model.selectedPath, FileManager.default.fileExists(atPath: path),
            !((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? true) {
             openFile(path)
         }
@@ -627,8 +659,6 @@ final class AppStore {
             return
         }
         if repo.id != selectedRepoID {
-            guard confirmLeavingEditor() else { return }
-            editor = nil // already confirmed
             selectRepo(repo.id)
             guard selectedRepoID == repo.id else { return }
         }
@@ -657,11 +687,8 @@ final class AppStore {
     func closeCurrent() {
         switch panel {
         case .files, .search:
-            guard editor != nil, confirmLeavingEditor() else { return NSSound.beep() }
-            fileTask?.cancel()
-            editor = nil
-            showDiffForOpenFile = false
-            explorer?.selectedPath = nil // so clicking the same file reopens it
+            guard let active = tabList.active else { return NSSound.beep() }
+            closeTabs([active])
         case .changes:
             guard selectedFileID != nil else { return NSSound.beep() }
             selectedFileID = nil
@@ -818,9 +845,7 @@ final class AppStore {
                 Task { await self.refresh(id) }
                 self.explorers[id]?.reload()
             }
-            if let selected = self.selectedRepoID, ids.contains(selected) {
-                self.editor?.reloadFromDiskIfClean()
-            }
+            for id in ids { self.reloadTabs(repoID: id) }
         }
     }
 
@@ -904,7 +929,7 @@ final class AppStore {
                 panel = .files
                 explorer?.reveal(relativePath: relative)
             } else {
-                openInEditor(repoRelativePath: relative)
+                openInEditor(repoRelativePath: relative, preview: false)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -956,21 +981,17 @@ final class AppStore {
             explorer.selectedPath = path
             return
         }
-        guard confirmLeavingEditor() else { return }
         recordJump()
         explorer.selectedPath = path
-        showDiffForOpenFile = false
         openFile(path)
     }
 
     /// Opens a repo-relative file of the selected repo in the Files panel.
-    func openInEditor(repoRelativePath: String) {
+    /// `preview`: VS Code's preview tab (replaced by the next preview open until it's edited or pinned).
+    func openInEditor(repoRelativePath: String, preview: Bool = true) {
         guard let explorer, let repo = selectedRepo else { return }
         let path = repo.path + "/" + repoRelativePath
-        if path != editor?.path {
-            guard confirmLeavingEditor() else { return }
-            openFile(path)
-        }
+        if path != editor?.path { openFile(path, preview: preview) } else if !preview { tabList.pin(path) }
         if panel != .search { panel = .files } // search results stay visible while browsing matches
         showDiffForOpenFile = false
         explorer.reveal(relativePath: repoRelativePath)
@@ -985,18 +1006,29 @@ final class AppStore {
         }
     }
 
-    private func openFile(_ path: String) {
-        fileTask?.cancel()
-        fileTask = Task {
+    private func openFile(_ path: String, preview: Bool = true) {
+        showDiffForOpenFile = false
+        if let session = tabSessions[path] {
+            tabList.open(path, asPreview: preview)
+            if let repoID = repo(forPath: path)?.id { lastActiveTab[repoID] = path }
+            noteRecent(path)
+            applyPendingReveal(path, controller: session.controller)
+            return
+        }
+        guard fileTasks[path] == nil else { return }
+        fileTasks[path] = Task {
+            defer { fileTasks[path] = nil }
             let content = await Task.detached(priority: .userInitiated) { FileContent.load(path: path) }.value
-            guard !Task.isCancelled else { return }
+            // Dropped if the user switched to another repo meanwhile.
+            guard !Task.isCancelled, let selected = selectedRepo, path.hasPrefix(selected.path + "/") else { return }
+            // The innermost repo: a nested repo's file opened from its parent repo's explorer blames in the nested one.
+            let repo = repo(forPath: path) ?? selected
             let session = EditorSession(
                 content: content,
                 referencePath: workspaceRelative(path),
                 onReferenceCopied: { [weak self] in self?.showToast("Copied \($0)") }
             )
-            if let controller = session.controller,
-               let repo = reposByDepth.first(where: { path.hasPrefix($0.path + "/") }) {
+            if let controller = session.controller {
                 controller.blameEnabled = showLineBlame
                 controller.onCommandClick = { [weak self] word in self?.searchSymbol(word, fromFile: path) }
                 controller.onVimAction = { [weak self] action in self?.handleVimAction(action, path: path) }
@@ -1007,15 +1039,93 @@ final class AppStore {
                     openCommit: { [weak self] sha in self?.showCommit(sha) }
                 )
             }
-            editor = session
+            let previewDirty = tabList.preview.flatMap { tabSessions[$0]?.isDirty } ?? false
+            tabSessions[path] = session
+            if let replaced = tabList.open(path, asPreview: preview, previewIsDirty: previewDirty) {
+                tabSessions[replaced] = nil
+            }
+            lastActiveTab[repo.id] = path
             noteRecent(path)
-            if let reveal = pendingReveal, reveal.path == path, let controller = session.controller {
-                pendingReveal = nil
-                DispatchQueue.main.async {
-                    controller.reveal(line: reveal.line, column: reveal.column, length: reveal.length)
-                }
+            applyPendingReveal(path, controller: session.controller)
+        }
+    }
+
+    private func applyPendingReveal(_ path: String, controller: EditorController?) {
+        guard let reveal = pendingReveal, reveal.path == path, let controller else { return }
+        pendingReveal = nil
+        DispatchQueue.main.async {
+            controller.reveal(line: reveal.line, column: reveal.column, length: reveal.length)
+        }
+    }
+
+    // MARK: Tabs
+
+    /// Shows a tab; a tab from another repo selects that repo (sidebar, explorer, changes follow).
+    func activateTab(_ path: String) {
+        guard tabList.contains(path), path != tabList.active else { return }
+        recordJump()
+        tabList.activate(path)
+        showDiffForOpenFile = false
+        guard let repo = repo(forPath: path) else { return }
+        lastActiveTab[repo.id] = path
+        if repo.id != selectedRepoID {
+            selectRepo(repo.id, recordOpen: false) // keeps this tab active and reveals it
+        } else {
+            explorer?.reveal(relativePath: String(path.dropFirst(repo.path.count + 1)))
+        }
+    }
+
+    /// Keeps a preview tab open (double-click on the tab).
+    func pinTab(_ path: String) { tabList.pin(path) }
+
+    /// ⌃Tab / ⌃⇧Tab.
+    func cycleTab(_ offset: Int) {
+        guard tabList.paths.count > 1, let next = tabList.neighbor(offset) else { return NSSound.beep() }
+        activateTab(next)
+    }
+
+    func closeOtherTabs(_ path: String) { closeTabs(tabList.others(than: path)) }
+    func closeTabsToRight(_ path: String) { closeTabs(tabList.right(of: path)) }
+    func closeAllTabs() { closeTabs(tabList.paths) }
+
+    /// Closes tabs after asking about unsaved edits (Cancel keeps all of them open).
+    func closeTabs(_ paths: [String]) {
+        guard !paths.isEmpty, confirmClosing(paths.compactMap { tabSessions[$0] }) else { return }
+        let wasActive = tabList.active
+        for path in paths {
+            fileTasks[path]?.cancel()
+            fileTasks[path] = nil
+            // Stay in the selected repo: the nearest tab of it, else none.
+            tabList.close(path) { [selectedRepoID] in self.repo(forPath: $0)?.id == selectedRepoID }
+            tabSessions[path] = nil
+        }
+        // A repo left without tabs mustn't reopen the closed file when it's selected again.
+        for repoID in Set(paths.compactMap { repo(forPath: $0)?.id })
+        where !tabList.paths.contains(where: { repo(forPath: $0)?.id == repoID }) {
+            lastActiveTab[repoID] = nil
+            explorers[repoID]?.selectedPath = nil
+        }
+        guard tabList.active != wasActive else { return }
+        showDiffForOpenFile = false
+        if let active = tabList.active, let repo = selectedRepo, active.hasPrefix(repo.path + "/") {
+            lastActiveTab[repo.id] = active
+            explorer?.reveal(relativePath: String(active.dropFirst(repo.path.count + 1)))
+        } else {
+            explorer?.selectedPath = nil // so clicking the same file reopens it
+        }
+    }
+
+    /// Reloads clean tabs of `repoID` from disk; closes clean tabs whose file is gone.
+    private func reloadTabs(repoID: String) {
+        var gone: [String] = []
+        for session in tabSessions.values where repo(forPath: session.path)?.id == repoID {
+            if !session.isDirty, !FileManager.default.fileExists(atPath: session.path) {
+                gone.append(session.path)
+            } else {
+                session.reloadFromDiskIfClean()
             }
         }
+        if !gone.isEmpty { closeTabs(gone) } // all clean: no prompt
     }
 
     /// Path relative to the workspace root (falls back to the absolute path outside it).
@@ -1087,19 +1197,29 @@ final class AppStore {
         }
     }
 
-    /// Asks to save unsaved edits. Returns false if the user cancelled.
-    func confirmLeavingEditor() -> Bool {
-        guard let editor, editor.isDirty else { return true }
+    /// Before quitting or opening another root: asks about unsaved edits in every repo's tabs.
+    func confirmLeavingEditor() -> Bool { confirmClosing(allSessions) }
+
+    /// Asks to save unsaved edits among `sessions`. Returns false if the user cancelled.
+    func confirmClosing(_ sessions: [EditorSession]) -> Bool {
+        let dirty = sessions.filter(\.isDirty)
+        guard !dirty.isEmpty else { return true }
         let alert = NSAlert()
-        alert.messageText = "Save changes to \((editor.path as NSString).lastPathComponent)?"
-        alert.informativeText = "Your changes will be lost if you don't save them."
-        alert.addButton(withTitle: "Save")
+        if dirty.count == 1 {
+            alert.messageText = "Save changes to \((dirty[0].path as NSString).lastPathComponent)?"
+            alert.informativeText = "Your changes will be lost if you don't save them."
+            alert.addButton(withTitle: "Save")
+        } else {
+            alert.messageText = "Save changes to \(dirty.count) files?"
+            alert.informativeText = dirty.map { workspaceRelative($0.path) }.joined(separator: "\n")
+            alert.addButton(withTitle: "Save All")
+        }
         alert.addButton(withTitle: "Don't Save")
         alert.addButton(withTitle: "Cancel")
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             do {
-                try editor.save()
+                for session in dirty { try session.save() }
                 return true
             } catch {
                 errorMessage = "Could not save: \(error.localizedDescription)"
@@ -1152,7 +1272,7 @@ final class AppStore {
                 errorMessage = error.localizedDescription
             }
             await refresh(repo.id)
-            editor?.reloadFromDiskIfClean()
+            reloadTabs(repoID: repo.id)
         }
     }
 
@@ -1219,7 +1339,7 @@ final class AppStore {
         }
         await refresh(repo.id)
         explorers[repo.id]?.reload()
-        editor?.reloadFromDiskIfClean()
+        reloadTabs(repoID: repo.id)
     }
 
     func fetchSelected() async { await sync(.fetch) }
@@ -1243,7 +1363,7 @@ final class AppStore {
         await refresh(repo.id)
         if operation == .pull {
             explorers[repo.id]?.reload()
-            editor?.reloadFromDiskIfClean()
+            reloadTabs(repoID: repo.id)
         }
     }
 
@@ -1271,13 +1391,11 @@ final class AppStore {
         quickOpenVisible = false
         recordJump()
         if entry.repoID != selectedRepoID {
-            guard confirmLeavingEditor() else { return }
-            // Discard check already done; don't ask twice.
-            editor = nil
             selectRepo(entry.repoID)
             guard selectedRepoID == entry.repoID else { return }
         }
-        openInEditor(repoRelativePath: entry.repoRelativePath)
+        // A deliberate pick: its own tab, never replacing the preview tab.
+        openInEditor(repoRelativePath: entry.repoRelativePath, preview: false)
     }
 
     private func noteRecent(_ path: String) {
