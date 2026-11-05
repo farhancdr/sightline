@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct BranchPicker: View {
@@ -45,9 +46,13 @@ struct BranchPicker: View {
         if !items.isEmpty {
             Section(title) {
                 ForEach(items) { branch in
-                    Button { select(branch) } label: { row(branch) }
-                        .buttonStyle(.plain)
-                        .disabled(branch.isCurrent)
+                    HStack(spacing: 6) {
+                        Button { select(branch) } label: { row(branch) }
+                            .buttonStyle(.plain)
+                            .disabled(branch.isCurrent)
+                        // Outside the switch button, so it also works on the (disabled) current branch.
+                        CopyBranchButton(name: branch.name)
+                    }
                 }
             }
         }
@@ -73,5 +78,31 @@ struct BranchPicker: View {
             isSwitching = false
             dismiss()
         }
+    }
+}
+
+/// Copies a branch name; shows a checkmark for a moment.
+private struct CopyBranchButton: View {
+    let name: String
+    @State private var copied = false
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(name, forType: .string)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(copied ? Color.ghAdded : (hovering ? Color.ghText : Color.ghMuted))
+                .frame(width: 20, height: 17)
+                .background(hovering ? Color.ghMuted.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 4))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .onHover { hovering = $0 }
+        .help(copied ? "Copied" : "Copy branch name")
     }
 }

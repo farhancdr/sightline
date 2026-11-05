@@ -182,6 +182,9 @@ private struct FileRow: View {
                 Button("Reveal in Finder") { store.revealInFinder(absolutePath) }
             }
             Button("Copy Relative Path") { copyRelativePath() }
+            if file.area != .untracked {
+                Button("Show File History") { store.showHistory(forPath: file.path) }
+            }
         }
     }
 

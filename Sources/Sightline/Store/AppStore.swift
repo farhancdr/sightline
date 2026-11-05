@@ -12,6 +12,7 @@ final class AppStore {
     private static let diffLayoutKey = "diffSideBySide"
     private static let repoSortKey = "repoSort"
     private static let lastOpenedKey = "repoLastOpened"
+    private static let openCountsKey = "repoOpenCounts"
     private static let lastRepoKey = "lastRepoPath"
     private static let onlyChangedKey = "showOnlyChangedRepos"
     private static let editorKey = "preferredEditor"
@@ -36,10 +37,12 @@ final class AppStore {
     private(set) var selectedRepoID: String?
     var repoFilter = ""
 
-    enum RepoSort: String, CaseIterable { case folder = "By Folder", recent = "Recent" }
+    enum RepoSort: String, CaseIterable { case folder = "By Folder", recent = "Recent", mostOpened = "Most Opened" }
     private(set) var repoSort: RepoSort
     /// When each repo (by path) was last opened from the sidebar / ⌘P, for "Recent".
     private(set) var lastOpened: [String: Double]
+    /// How many times each repo was opened from the sidebar / ⌘P, for "Most Opened".
+    private(set) var openCounts: [String: Int]
     /// Sidebar shows only repos with uncommitted changes or unpushed commits (plus the selected one).
     var showOnlyChanged: Bool { didSet { UserDefaults.standard.set(showOnlyChanged, forKey: Self.onlyChangedKey) } }
 
@@ -93,6 +96,8 @@ final class AppStore {
     private(set) var hasMoreCommits = false
     private(set) var isLoadingHistory = false
     private(set) var selectedCommitID: String?
+    /// Repo-relative file or folder the History panel is limited to (nil: whole repo).
+    private(set) var historyPath: String?
     private(set) var selectedCommitMessage: String?
     private(set) var commitFiles: [CommitFile] = []
     private(set) var selectedCommitFileID: String?
@@ -202,6 +207,7 @@ final class AppStore {
         diffSideBySide = UserDefaults.standard.object(forKey: Self.diffLayoutKey) as? Bool ?? true
         repoSort = RepoSort(rawValue: UserDefaults.standard.string(forKey: Self.repoSortKey) ?? "") ?? .folder
         lastOpened = UserDefaults.standard.dictionary(forKey: Self.lastOpenedKey) as? [String: Double] ?? [:]
+        openCounts = UserDefaults.standard.dictionary(forKey: Self.openCountsKey) as? [String: Int] ?? [:]
         showOnlyChanged = UserDefaults.standard.bool(forKey: Self.onlyChangedKey)
         preferredEditorID = UserDefaults.standard.string(forKey: Self.editorKey)
         reviewed = UserDefaults.standard.dictionary(forKey: Self.reviewedKey) as? [String: [String: String]] ?? [:]
@@ -326,6 +332,8 @@ final class AppStore {
     private func noteRepoOpened(_ id: String) {
         lastOpened[id] = Date().timeIntervalSince1970
         UserDefaults.standard.set(lastOpened, forKey: Self.lastOpenedKey)
+        openCounts[id, default: 0] += 1
+        UserDefaults.standard.set(openCounts, forKey: Self.openCountsKey)
     }
 
     func setRepoSort(_ sort: RepoSort) {
@@ -340,6 +348,21 @@ final class AppStore {
 
     nonisolated static func rankByRecent(_ repos: [Repo], lastOpened: [String: Double]) -> [Repo] {
         repos.sorted { lhs, rhs in
+            let (ta, tb) = (lastOpened[lhs.id] ?? 0, lastOpened[rhs.id] ?? 0)
+            if ta != tb { return ta > tb }
+            return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
+        }
+    }
+
+    /// Most opened first (ties: most recently opened), then never-opened repos A–Z.
+    func rankedByMostOpened(_ repos: [Repo]) -> [Repo] {
+        Self.rankByMostOpened(repos, counts: openCounts, lastOpened: lastOpened)
+    }
+
+    nonisolated static func rankByMostOpened(_ repos: [Repo], counts: [String: Int], lastOpened: [String: Double]) -> [Repo] {
+        repos.sorted { lhs, rhs in
+            let (ca, cb) = (counts[lhs.id] ?? 0, counts[rhs.id] ?? 0)
+            if ca != cb { return ca > cb }
             let (ta, tb) = (lastOpened[lhs.id] ?? 0, lastOpened[rhs.id] ?? 0)
             if ta != tb { return ta > tb }
             return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
@@ -407,7 +430,7 @@ final class AppStore {
     /// Changes when HEAD moves (commit/pull/switch) and when the unpushed set changes (push/fetch).
     private var currentHistoryKey: String? {
         selectedRepo.map {
-            "\($0.id)|\(selectedStatus?.oid ?? "")|\(selectedStatus?.upstream ?? "")|\(selectedStatus?.ahead ?? 0)"
+            "\($0.id)|\(selectedStatus?.oid ?? "")|\(selectedStatus?.upstream ?? "")|\(selectedStatus?.ahead ?? 0)|\(historyPath ?? "")"
         }
     }
 
@@ -425,12 +448,13 @@ final class AppStore {
         guard let repo = selectedRepo else { return }
         let key = currentHistoryKey
         let skip = reset ? 0 : commits.count
+        let paths = historyPath.map { [$0] } ?? []
         isLoadingHistory = true
         historyTask?.cancel()
         historyTask = Task {
             let page: [CommitInfo]
             do {
-                page = try await GitCommands.log(repo.path, skip: skip, limit: Self.historyPage)
+                page = try await GitCommands.log(repo.path, skip: skip, limit: Self.historyPage, paths: paths)
             } catch {
                 page = [] // no commits yet, or not a repo anymore
             }
@@ -456,6 +480,7 @@ final class AppStore {
         hasMoreCommits = false
         isLoadingHistory = false
         historyKey = nil
+        historyPath = nil
         extraCommit = nil
         selectedCommitID = nil
         selectedCommitMessage = nil
@@ -479,7 +504,11 @@ final class AppStore {
             guard !Task.isCancelled, selectedCommitID == commit.sha else { return }
             commitFiles = files
             selectedCommitMessage = message
-            selectCommitFile(files.first?.id)
+            // Filtered history: open the file (or the first file in the folder) being looked at.
+            let focus = historyPath.flatMap { path in
+                files.first { $0.path == path } ?? files.first { $0.path.hasPrefix(path + "/") }
+            }
+            selectCommitFile((focus ?? files.first)?.id)
         }
     }
 
@@ -506,6 +535,23 @@ final class AppStore {
             guard !Task.isCancelled, selectedCommitID == commit.sha, selectedCommitFileID == file.id else { return }
             commitDiff = document
         }
+    }
+
+    /// History of one file or folder (repo-relative); nil shows the whole repo again.
+    func showHistory(forPath path: String?) {
+        let path = path.flatMap { $0.isEmpty ? nil : $0 }
+        repoPanelVisible = true
+        if historyPath != path {
+            historyPath = path
+            historyTask?.cancel()
+            commits = []
+            hasMoreCommits = false
+            extraCommit = nil
+            selectedCommitID = nil
+            historyKey = nil
+        }
+        // Path first: `panel`'s didSet loads with the current key.
+        if panel == .history { loadHistoryIfNeeded() } else { panel = .history }
     }
 
     /// Opens a commit in the History panel (e.g. from a blame annotation), loading it if needed.
@@ -815,6 +861,80 @@ final class AppStore {
     func showFullDiff() {
         diffLineLimit = nil
         loadDiff(resetLimit: false)
+    }
+
+    // MARK: New file / folder
+
+    struct CreateItemError: LocalizedError {
+        let errorDescription: String?
+    }
+
+    /// Where New File / New Folder goes: the given row (its parent for a file), else the explorer
+    /// selection, else the repo root.
+    func creationDirectory(for node: FileNode?) -> String? {
+        guard let repo = selectedRepo else { return nil }
+        if let node { return node.isDirectory ? node.path : (node.path as NSString).deletingLastPathComponent }
+        if let selected = explorer?.selectedPath, selected.hasPrefix(repo.path + "/") {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: selected, isDirectory: &isDirectory) {
+                return isDirectory.boolValue ? selected : (selected as NSString).deletingLastPathComponent
+            }
+        }
+        return repo.path
+    }
+
+    /// Asks for a name, creates the file or folder, then opens the file / reveals the folder.
+    func promptNewItem(folder: Bool, in node: FileNode? = nil) {
+        guard let repo = selectedRepo, let dir = creationDirectory(for: node) else { return NSSound.beep() }
+        let alert = NSAlert()
+        alert.messageText = folder ? "New Folder" : "New File"
+        let location = dir == repo.path ? repo.name : repo.name + "/" + String(dir.dropFirst(repo.path.count + 1))
+        alert.informativeText = "In \(location)/\nUse / for nested folders, e.g. utils/format.ts"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = folder ? "folder name" : "file name"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            let relative = try Self.createItem(named: field.stringValue, folder: folder, in: dir, repoPath: repo.path)
+            explorer?.reload()
+            if folder {
+                panel = .files
+                explorer?.reveal(relativePath: relative)
+            } else {
+                openInEditor(repoRelativePath: relative)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Creates `name` (may contain `/`) under `dir`; returns its repo-relative path.
+    @discardableResult
+    nonisolated static func createItem(named name: String, folder: Bool, in dir: String, repoPath: String) throws -> String {
+        var name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        while name.hasSuffix("/") { name.removeLast() }
+        let parts = name.split(separator: "/", omittingEmptySubsequences: false)
+        guard !name.isEmpty, !name.hasPrefix("/"), !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+            throw CreateItemError(errorDescription: "“\(name)” isn't a valid name.")
+        }
+        let path = dir + "/" + name
+        guard path.hasPrefix(repoPath + "/") else { throw CreateItemError(errorDescription: "Can't create outside the repo.") }
+        let manager = FileManager.default
+        guard !manager.fileExists(atPath: path) else {
+            throw CreateItemError(errorDescription: "“\(name)” already exists.")
+        }
+        if folder {
+            try manager.createDirectory(atPath: path, withIntermediateDirectories: true)
+        } else {
+            try manager.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            guard manager.createFile(atPath: path, contents: Data()) else {
+                throw CreateItemError(errorDescription: "Couldn't create “\(name)”.")
+            }
+        }
+        return String(path.dropFirst(repoPath.count + 1))
     }
 
     // MARK: Explorer / editor

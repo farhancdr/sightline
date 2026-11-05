@@ -111,13 +111,20 @@ final class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     private func style(_ terminal: LocalProcessTerminalView) {
-        let dark = isDark
+        Self.applyColors(to: terminal, dark: isDark)
+        terminal.needsDisplay = true
+    }
+
+    static func applyColors(to terminal: TerminalView, dark: Bool) {
         terminal.nativeBackgroundColor = SyntaxTheme.rgb(dark ? 0x0D1117 : 0xFFFFFF)
         terminal.nativeForegroundColor = SyntaxTheme.rgb(dark ? 0xE6EDF3 : 0x1F2328)
         terminal.caretColor = SyntaxTheme.rgb(dark ? 0x4493F8 : 0x0969DA)
         terminal.selectedTextBackgroundColor = SyntaxTheme.rgb(dark ? 0x1F3A5F : 0xB6E3FF)
-        terminal.installColors((dark ? Self.darkPalette : Self.lightPalette).map(Self.color))
-        terminal.needsDisplay = true
+        // Standard xterm colors for 16–255. SwiftTerm's default derives them from the 16-color palette and
+        // the background, which on a light theme turns fixed colors (powerlevel10k's 236 background with
+        // 31/76/178 text) into dark-on-dark. Prompts pick those indices for their exact xterm values.
+        terminal.getTerminal().ansi256PaletteStrategy = .xterm
+        terminal.installColors((dark ? darkPalette : lightPalette).map(color))
     }
 
     private static func color(_ hex: UInt32) -> SwiftTerm.Color {
@@ -138,7 +145,7 @@ final class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
     // MARK: Creation
 
     private func makeTerminal(for repo: Repo) -> LocalProcessTerminalView {
-        let terminal = LocalProcessTerminalView(frame: container.bounds)
+        let terminal = FocusingTerminalView(frame: container.bounds)
         terminal.autoresizingMask = [.width, .height]
         terminal.processDelegate = self
         terminal.font = font
@@ -214,6 +221,29 @@ final class TerminalManager: NSObject, LocalProcessTerminalViewDelegate {
 
 /// Keeps every terminal sized to the container, including hidden ones, so background shells
 /// see the real size (no SIGWINCH storm when they become visible).
+/// SwiftTerm's `mouseDown` only handles selection / mouse reporting and never takes keyboard focus, so a
+/// click left focus wherever it was (e.g. the sidebar's repo filter). Take it on any click.
+final class FocusingTerminalView: LocalProcessTerminalView {
+    private func takeFocus() {
+        if let window, window.firstResponder !== self { window.makeFirstResponder(self) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        takeFocus()
+        super.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        takeFocus()
+        super.rightMouseDown(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        takeFocus()
+        super.otherMouseDown(with: event)
+    }
+}
+
 final class TerminalContainerView: NSView {
     override func layout() {
         super.layout()

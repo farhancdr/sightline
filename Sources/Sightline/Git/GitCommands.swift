@@ -77,9 +77,13 @@ enum GitCommands {
     /// `%x1f` between fields, `%x1e` after each record: subjects/names can contain anything else.
     static let logFormat = "%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%D%x1f%s%x1e"
 
-    static func log(_ repo: String, skip: Int = 0, limit: Int = 100, revision: String? = nil) async throws -> [CommitInfo] {
+    /// `paths`: only commits touching these repo-relative files/folders (no `--follow`: it breaks `--skip` paging;
+    /// renames still show in the commit's file list via `-M`).
+    static func log(_ repo: String, skip: Int = 0, limit: Int = 100, revision: String? = nil,
+                    paths: [String] = []) async throws -> [CommitInfo] {
         var args = ["log", "--format=\(logFormat)", "-n", "\(limit)", "--skip=\(skip)"]
         if let revision { args.append(revision) }
+        if !paths.isEmpty { args += ["--"] + paths }
         let result = try await Git.run(args, in: repo)
         return LogParser.parse(result.output)
     }

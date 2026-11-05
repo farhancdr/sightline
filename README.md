@@ -44,7 +44,7 @@ So Sightline does just those things, quickly.
 - **⌘-click any name** (function, class, variable) to search its repo for it: exact case, whole word, in files
   of the same language (a `.ts` file searches `*.ts, *.tsx, …`). A lightweight "find usages" with no language server.
 - **⌥- / ⌥=: go back / forward** through the places you jumped from (search results, ⌘P, the explorer).
-- **⌘T: jump to a repo**, sorted by folder or by most recently opened.
+- **⌘T: jump to a repo**, sorted by folder, most recently opened, or most opened.
 
 **Made for reviewing AI changes**
 - VS Code-style **diff viewer**: side-by-side or inline, whole-file context, syntax highlighting,
@@ -59,6 +59,8 @@ So Sightline does just those things, quickly.
   Click it to open that commit.
 - **History**: every repo's commits with branch/tag labels and an "unpushed" badge, the full message, the files
   each commit changed, and a whole-file diff per file. This is how you review what the agent already committed.
+  **History of one file or folder**: right-click it in the explorer or Changes list, or click the clock icon
+  above an open file.
 - Stage, unstage and discard per file or per section, then **Commit** or **Commit (No Verify)**. Git hooks
   run with your login-shell `PATH`, so husky/lint-staged find `node`/`npx` even when the app is opened from Finder.
 - **Fetch, Pull (fast-forward only) and Push** (publishes new branches), plus branch switching.
@@ -66,7 +68,7 @@ So Sightline does just those things, quickly.
   (VS Code, Cursor, Windsurf, Zed, Sublime Text, Xcode), or reveal in Finder.
 
 **Just enough to fix things by hand**
-- File explorer with git status colors, and a plain-text editor with VS Code's everyday keys: find/replace, go to
+- File explorer with git status colors, new file / new folder (⌘N / ⌥⌘N or right-click), and a plain-text editor with VS Code's everyday keys: find/replace, go to
   line, toggle comment, move/copy/delete lines, indent/outdent, select line, auto-indent, ⌘S.
 - **Vim mode** (View → Vim Mode): Normal / Insert / Visual / Visual-line, counts, `d c y > < gu gU` with motions
   (`w b e 0 ^ $ gg G f t ; , % { } n N`) and text objects (`iw aw i" a" i( a{ ip`…), `x X s S r J p P o O ~`,
@@ -113,6 +115,7 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 | Key | Action |
 |---|---|
 | ⌘P | Go to file (all repos) |
+| ⌘N / ⌥⌘N | New file / new folder (in the selected explorer folder; `a/b/c.ts` creates folders too) |
 | ⌘T | Find repo (⏎ opens the top match, ⎋ clears) |
 | ⇧⌘F | Search in files across all repos (Aa / ab / .* toggles) |
 | ⌥- / ⌥= | Go back / forward |

@@ -17,6 +17,12 @@ struct ExplorerView: View {
                     .foregroundStyle(Color.ghMuted)
                     .lineLimit(1)
                 Spacer()
+                Button { store.promptNewItem(folder: false) } label: { Image(systemName: "doc.badge.plus") }
+                    .buttonStyle(.borderless)
+                    .help("New File… (⌘N)")
+                Button { store.promptNewItem(folder: true) } label: { Image(systemName: "folder.badge.plus") }
+                    .buttonStyle(.borderless)
+                    .help("New Folder… (⌥⌘N)")
                 Button { explorer.collapseAll() } label: { Image(systemName: "rectangle.compress.vertical") }
                     .buttonStyle(.borderless)
                     .help("Collapse all folders")
@@ -37,6 +43,13 @@ struct ExplorerView: View {
                         .tag(row.id)
                         .id(row.id)
                         .contextMenu {
+                            Button("New File…") { store.promptNewItem(folder: false, in: row.node) }
+                            Button("New Folder…") { store.promptNewItem(folder: true, in: row.node) }
+                            Divider()
+                            Button(row.node.isDirectory ? "Show Folder History" : "Show File History") {
+                                store.showHistory(forPath: row.node.relativePath)
+                            }
+                            Divider()
                             if !row.node.isDirectory, let editor = store.preferredEditor {
                                 Button("Open in \(editor.name)") { store.openExternally(path: row.node.path) }
                             }

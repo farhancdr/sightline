@@ -132,6 +132,42 @@ final class RepoSortTests: XCTestCase {
     }
 }
 
+final class MostOpenedSortTests: XCTestCase {
+    func testMostOpenedRanking() {
+        let a = Repo(path: "/w/services/a", relativePath: "services/a")
+        let b = Repo(path: "/w/services/b", relativePath: "services/b")
+        let c = Repo(path: "/w/apps/c", relativePath: "apps/c")
+        let d = Repo(path: "/w/apps/d", relativePath: "apps/d")
+        let ranked = AppStore.rankByMostOpened(
+            [a, b, c, d], counts: [b.id: 5, c.id: 2, d.id: 2], lastOpened: [b.id: 10, c.id: 300, d.id: 200]
+        )
+        // Most opened first; ties by most recent; never-opened last.
+        XCTAssertEqual(ranked.map(\.relativePath), ["services/b", "apps/c", "apps/d", "services/a"])
+    }
+}
+
+final class CreateItemTests: XCTestCase {
+    func testCreatesFilesAndFoldersSafely() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-create-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try FileManager.default.createDirectory(atPath: root + "/src", withIntermediateDirectories: true)
+
+        XCTAssertEqual(try AppStore.createItem(named: " index.ts ", folder: false, in: root + "/src", repoPath: root), "src/index.ts")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/src/index.ts"))
+        XCTAssertEqual(try AppStore.createItem(named: "utils/format.ts", folder: false, in: root + "/src", repoPath: root),
+                       "src/utils/format.ts")
+        XCTAssertEqual(try AppStore.createItem(named: "docs/api/", folder: true, in: root, repoPath: root), "docs/api")
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root + "/docs/api", isDirectory: &isDirectory) && isDirectory.boolValue)
+
+        for bad in ["", "   ", "/etc/x", "../escape", "a//b", "./x"] {
+            XCTAssertThrowsError(try AppStore.createItem(named: bad, folder: false, in: root, repoPath: root), bad)
+        }
+        XCTAssertThrowsError(try AppStore.createItem(named: "index.ts", folder: false, in: root + "/src", repoPath: root),
+                             "existing file isn't overwritten")
+    }
+}
+
 final class StagingTests: XCTestCase {
     private var dir: URL!
 
@@ -457,6 +493,15 @@ final class HistoryTests: XCTestCase {
 
         let log = try await GitCommands.log(repo)
         XCTAssertEqual(log.map(\.subject), ["edit | rename", "root commit"])
+        // Path-filtered history: a file, a folder, and a path only the root commit touched.
+        let aLog = try await GitCommands.log(repo, paths: ["a.txt"])
+        XCTAssertEqual(aLog.map(\.subject), ["edit | rename", "root commit"])
+        let newLog = try await GitCommands.log(repo, paths: ["new"])
+        XCTAssertEqual(newLog.map(\.subject), ["edit | rename"])
+        let oldLog = try await GitCommands.log(repo, paths: ["old/name.txt"])
+        XCTAssertEqual(oldLog.map(\.subject), ["edit | rename", "root commit"])
+        let pagedLog = try await GitCommands.log(repo, skip: 1, limit: 1, paths: ["a.txt"])
+        XCTAssertEqual(pagedLog.map(\.subject), ["root commit"])
         XCTAssertTrue(log[1].isRoot)
         XCTAssertEqual(log[0].author, "Tess")
         let message = try await GitCommands.message(repo, sha: log[0].sha)
@@ -1122,5 +1167,45 @@ final class RowHighlightTests: XCTestCase {
         XCTAssertEqual(RowHighlight(selected: true, listFocused: false, windowActive: true), .gray)
         XCTAssertEqual(RowHighlight(selected: true, listFocused: true, windowActive: false), .gray)
         XCTAssertEqual(RowHighlight(selected: true, listFocused: false, windowActive: false, prominence: .increased), .accent)
+    }
+}
+
+@MainActor
+final class TerminalFocusTests: XCTestCase {
+    func testClickTakesFocusFromTextField() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let field = NSTextField(frame: NSRect(x: 0, y: 360, width: 200, height: 24))
+        let terminal = FocusingTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 340))
+        window.contentView?.addSubview(field)
+        window.contentView?.addSubview(terminal)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        XCTAssertFalse(window.firstResponder === terminal)
+
+        let click = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: NSPoint(x: 100, y: 100), modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        terminal.mouseDown(with: click)
+        XCTAssertTrue(window.firstResponder === terminal, "clicking the terminal focuses it")
+    }
+}
+
+@MainActor
+final class TerminalPaletteTests: XCTestCase {
+    /// powerlevel10k's 256-color indices must keep their xterm values on the light theme too.
+    func testExtendedColorsStayXtermInLightMode() {
+        let terminal = TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        for dark in [true, false] {
+            TerminalManager.applyColors(to: terminal, dark: dark)
+            XCTAssertEqual(terminal.getTerminal().ansi256PaletteStrategy, .xterm, "dark=\(dark)")
+        }
+    }
+}
+
+final class SplitDividerTests: XCTestCase {
+    func testFractionIsClamped() {
+        XCTAssertEqual(SplitDiffView.clampFraction(0.02), 0.15)
+        XCTAssertEqual(SplitDiffView.clampFraction(0.99), 0.85)
+        XCTAssertEqual(SplitDiffView.clampFraction(0.3), 0.3)
     }
 }

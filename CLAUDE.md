@@ -68,6 +68,9 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
 - **Terminals:** keep every terminal view in the container and toggle `isHidden`; removing views zeroes their
   size and sends SIGWINCH storms. Don't `makeFirstResponder` on repo switch (steals sidebar arrow keys).
   Interactive zsh ignores SIGTERM: send SIGHUP after `terminate()`.
+  SwiftTerm's `mouseDown` never takes focus; terminals are `FocusingTerminalView` (makes itself first responder on click).
+  Keep `ansi256PaletteStrategy = .xterm`: SwiftTerm's default (`.base16Lab`) derives colors 16–255 from the
+  16-color palette, so on the light theme fixed prompt colors (p10k 236/31/76/178) become dark-on-dark.
 - **SwiftUI TextField + `.onKeyPress` in an overlay** stopped updating its binding after the first keystroke.
   The ⌘P palette uses `PaletteSearchField` (NSTextField + delegate commands) instead.
 - **Selected-row colors:** `backgroundProminence` stays `.standard` on sidebar-style lists even when the row
@@ -138,4 +141,6 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   edits don't misalign lines; details for a sha appear only on its first occurrence. Stale runs are dropped by a
   generation counter and the annotation is hidden while typing.
 - **History:** log uses `%x1f`/`%x1e` separators (subjects can contain anything); a commit's files/diff are
-  against its first parent (`<sha>^`), root commits via `diff-tree --root` / `show --root`.
+  against its first parent (`<sha>^`), root commits via `diff-tree --root` / `show --root`. File/folder history
+  is `log -- <path>` (`store.historyPath`, part of the history key; cleared on repo switch). No `--follow`: it
+  breaks `--skip` paging.

@@ -24,9 +24,24 @@ struct HistoryList: View {
     @FocusState private var listFocused: Bool
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let path = store.historyPath {
+                HistoryFilterChip(path: path) { store.showHistory(forPath: nil) }
+                Divider()
+            }
+            commitList
+        }
+    }
+
+    @ViewBuilder
+    private var commitList: some View {
         if store.commits.isEmpty {
             if store.isLoadingHistory {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let path = store.historyPath {
+                ContentUnavailableView("No commits", systemImage: "clock.arrow.circlepath",
+                                       description: Text("Nothing committed touches \(path) yet."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView("No commits yet", systemImage: "clock.arrow.circlepath")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -53,6 +68,36 @@ struct HistoryList: View {
             .scrollContentBackground(.hidden)
             .focused($listFocused)
         }
+    }
+}
+
+/// "History of <path>" with a button back to the whole repo.
+private struct HistoryFilterChip: View {
+    let path: String
+    let clear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill").foregroundStyle(Color.ghAccent)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("History of").font(.caption2).foregroundStyle(Color.ghMuted)
+                Text(path)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Color.ghText)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 4)
+            Button(action: clear) {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(Color.ghMuted)
+            }
+            .buttonStyle(.borderless)
+            .help("Show the whole repo's history")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.ghAccent.opacity(0.08))
+        .help(path)
     }
 }
 

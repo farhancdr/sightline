@@ -14,6 +14,11 @@ struct SightlineApp: App {
         .defaultSize(width: 1400, height: 880)
         .commands {
             CommandGroup(after: .newItem) {
+                Button("New File…") { store.promptNewItem(folder: false) }
+                    .keyboardShortcut("n")
+                Button("New Folder…") { store.promptNewItem(folder: true) }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                Divider()
                 Button("Go to File…") { store.showQuickOpen() }
                     .keyboardShortcut("p")
                 Divider()

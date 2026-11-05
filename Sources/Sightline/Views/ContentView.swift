@@ -214,6 +214,11 @@ private struct FilePane: View {
                 .buttonStyle(.borderless)
                 .help(store.markdownPreview && !store.showDiffForOpenFile ? "Show Source (⇧⌘V)" : "Open Preview (⇧⌘V)")
             }
+            Button { store.showHistory(forPath: relative) } label: {
+                Image(systemName: "clock.arrow.circlepath").foregroundStyle(Color.ghMuted)
+            }
+            .buttonStyle(.borderless)
+            .help("Show File History")
             OpenInEditorButtons(store: store) { (editor.path, editor.controller?.caretLine()) }
             if change != nil {
                 Picker("", selection: Binding(

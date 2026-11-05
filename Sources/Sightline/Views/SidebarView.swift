@@ -7,8 +7,10 @@ struct SidebarView: View {
 
     private var groups: [(name: String, repos: [Repo])] {
         let repos = store.filteredRepos
-        if store.repoSort == .recent {
-            return [("Recent", store.rankedByRecent(repos))]
+        switch store.repoSort {
+        case .recent: return [("Recent", store.rankedByRecent(repos))]
+        case .mostOpened: return [("Most Opened", store.rankedByMostOpened(repos))]
+        case .folder: break
         }
         var order: [String] = []
         var map: [String: [Repo]] = [:]
@@ -29,7 +31,7 @@ struct SidebarView: View {
                             RepoRow(
                                 repo: repo,
                                 status: store.statuses[repo.id],
-                                showFullPath: store.repoSort == .recent
+                                showFullPath: store.repoSort != .folder
                             )
                             .rowHighlight(selected: store.selectedRepoID == repo.id, listFocused: listFocused)
                             .tag(repo.id)
@@ -109,7 +111,7 @@ struct SidebarView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Sort repos: by folder, or most recently opened")
+            .help("Sort repos: by folder, most recently opened, or most opened")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)

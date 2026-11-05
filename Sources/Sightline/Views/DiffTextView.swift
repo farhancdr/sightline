@@ -493,10 +493,53 @@ enum DiffReference {
 }
 
 /// VS Code-style side-by-side diff: old on the left, new on the right, scrolled together.
+/// The line between the two diff columns: drag to resize, double-click to split evenly.
+final class SplitDividerHandle: NSView {
+    static let grabWidth: CGFloat = 7
+    var onDrag: ((CGFloat) -> Void)?
+    var onReset: (() -> Void)?
+    private var hovering = false { didSet { needsDisplay = true } }
+    private var dragging = false { didSet { needsDisplay = true } }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            onReset?()
+            return
+        }
+        dragging = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let superview else { return }
+        onDrag?(superview.convert(event.locationInWindow, from: nil).x)
+    }
+
+    override func mouseUp(with event: NSEvent) { dragging = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let active = hovering || dragging
+        (active ? Palette.accent : Palette.border).setFill()
+        let width: CGFloat = active ? 3 : 1
+        NSRect(x: (bounds.width - width) / 2, y: 0, width: width, height: bounds.height).fill()
+    }
+}
+
 final class SplitDiffView: NSView, DiffHostView {
     private let left = DiffColumn()
     private let right = DiffColumn()
-    private let divider = NSBox()
+    private let divider = SplitDividerHandle()
     private let overview = DiffOverviewRuler()
     private let overviewWidth: CGFloat = 14
     private var changeRows: [Int] = []
@@ -514,8 +557,9 @@ final class SplitDiffView: NSView, DiffHostView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        divider.boxType = .separator
-        for view in [left.scrollView, right.scrollView, divider, overview] { addSubview(view) }
+        for view in [left.scrollView, right.scrollView, overview, divider] { addSubview(view) }
+        divider.onDrag = { [weak self] x in self?.dragDivider(to: x) }
+        divider.onReset = { [weak self] in self?.setFraction(0.5) }
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(leftScrolled), name: NSView.boundsDidChangeNotification,
                            object: left.scrollView.contentView)
@@ -534,9 +578,11 @@ final class SplitDiffView: NSView, DiffHostView {
     override func layout() {
         super.layout()
         let content = bounds.width - overviewWidth
-        let half = floor(content / 2)
+        let half = floor(content * Self.fraction)
         left.scrollView.frame = NSRect(x: 0, y: 0, width: half, height: bounds.height)
-        divider.frame = NSRect(x: half, y: 0, width: 1, height: bounds.height)
+        // The handle is wider than the 1pt line it draws, so it's easy to grab.
+        divider.frame = NSRect(x: half - SplitDividerHandle.grabWidth / 2 + 0.5, y: 0,
+                               width: SplitDividerHandle.grabWidth, height: bounds.height)
         right.scrollView.frame = NSRect(x: half + 1, y: 0, width: content - half - 1, height: bounds.height)
         overview.frame = NSRect(x: content, y: 0, width: overviewWidth, height: bounds.height)
         overview.updateVisible(left.visibleFraction)
@@ -547,6 +593,29 @@ final class SplitDiffView: NSView, DiffHostView {
         guard let row = pendingScrollRow, bounds.height > 0 else { return }
         pendingScrollRow = nil
         DispatchQueue.main.async { [weak self] in self?.left.scroll(toRow: row) }
+    }
+
+    // MARK: Resizable split
+
+    private static let fractionKey = "diffSplitFraction"
+    /// Left column's share of the width; shared by every split diff and remembered across launches.
+    private(set) static var fraction: CGFloat = {
+        let saved = UserDefaults.standard.double(forKey: fractionKey)
+        return saved > 0 ? clampFraction(saved) : 0.5
+    }()
+
+    static func clampFraction(_ value: CGFloat) -> CGFloat { min(max(value, 0.15), 0.85) }
+
+    private func dragDivider(to x: CGFloat) {
+        let content = bounds.width - overviewWidth
+        guard content > 0 else { return }
+        setFraction(x / content)
+    }
+
+    private func setFraction(_ value: CGFloat) {
+        Self.fraction = Self.clampFraction(value)
+        UserDefaults.standard.set(Double(Self.fraction), forKey: Self.fractionKey)
+        needsLayout = true
     }
 
     func show(_ document: DiffDocument, resetScroll: Bool) {
