@@ -64,7 +64,11 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
 - **PATH:** GUI apps get a minimal PATH. `Git.loginShellPath` (from `$SHELL -ilc`) is used for git so hooks
   (husky → node/npx via nvm) work when launched from Finder. Resolve the git binary explicitly.
 - **FileWatcher relevance:** inside `.git/` only HEAD, index, refs, packed-refs and *_HEAD matter; ignore
-  objects/, logs/, `*.lock`, node_modules, .build.
+  objects/, logs/, `*.lock`, node_modules, .build. `isRelevant` matches raw UTF-8, not
+  `String.contains`/`range(of:)`: FSEvents delivers whole batches on the main queue before the debounce,
+  and Foundation's locale-aware search costs 6.0µs per path against 0.19µs byte-wise (10k paths: 60ms of
+  blocked main thread vs 2ms). `FileWatcherRelevanceTests` pins it to the old implementation — mind that
+  `split(separator:)` drops empty components, so `//.git//HEAD` is HEAD.
 - **Terminals:** keep every terminal view in the container and toggle `isHidden`; removing views zeroes their
   size and sends SIGWINCH storms. Don't `makeFirstResponder` on repo switch (steals sidebar arrow keys).
   Interactive zsh ignores SIGTERM: send SIGHUP after `terminate()`.
@@ -133,6 +137,11 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   give draggable handles real layout width: AppKit-backed neighbours (editor, terminal) are drawn on top of any
   SwiftUI overlay that extends past its frame and take the mouse.
 - **Dividers:** use `VerticalRule` (theme border color); the system split divider is invisible on the dark sidebar.
+- **No rubber-band in lists:** every list row carries `.noScrollBounce()` (`ScrollElasticity.swift`), which
+  clears `NSScrollView.verticalScrollElasticity` so a list stops at its end like VS Code's. It has to sit on a
+  *row*: a List's own `.background` is placed outside the scroll view, where `enclosingScrollView` is nil. And
+  it cannot be a one-shot assignment — SwiftUI's `ListCoreScrollView` puts elasticity back to `.allowed` on
+  every layout pass, so the view re-clamps it from `willStartLiveScroll` / `didLiveScroll`.
 - **SVG text:** macOS's SVG renderer ignores font-weight/letter-spacing/tspan colors; `render-assets.swift`
   strips `<text>` and draws it with the system font.
 - **Terminal:** colors default to Dark even in the light app theme (shell prompts like powerlevel10k are themed

@@ -829,8 +829,11 @@ final class AppStore {
     }
 
     private func handleFileEvents(_ paths: [String]) {
+        // Built once per batch, not once per path: FSEvents can hand over thousands of paths at a
+        // time, and `$0.path + "/"` inside the loop allocated a string per repo per path.
+        let candidates = reposByDepth.map { (id: $0.id, path: $0.path, prefix: $0.path + "/") }
         for path in paths where FileWatcher.isRelevant(path) {
-            if let repo = reposByDepth.first(where: { path == $0.path || path.hasPrefix($0.path + "/") }) {
+            if let repo = candidates.first(where: { path == $0.path || path.hasPrefix($0.prefix) }) {
                 pendingWatchRepos.insert(repo.id)
             }
         }
