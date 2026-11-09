@@ -171,6 +171,7 @@ private struct ExplorerRowView: View {
         }
         .opacity(row.isIgnored ? 0.45 : 1)
         .contentShape(Rectangle())
+        .background(NoScrollElasticity())
         .onHover { hovering = $0 }
         .help(row.node.relativePath)
     }
