@@ -34,6 +34,7 @@ struct SidebarView: View {
                                 showFullPath: store.repoSort != .folder
                             )
                             .rowHighlight(selected: store.selectedRepoID == repo.id, listFocused: listFocused)
+                            .noScrollBounce()
                             .tag(repo.id)
                         }
                     }

@@ -64,6 +64,7 @@ struct QuickOpenView: View {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, entry in
                         row(entry, isSelected: index == selection)
                             .id(index)
+                            .noScrollBounce()
                             .onTapGesture {
                                 selection = index
                                 open(shown)

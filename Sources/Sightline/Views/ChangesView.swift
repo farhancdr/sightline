@@ -74,6 +74,7 @@ private struct ChangesList: View {
                                 ForEach(files) { file in
                                     FileRow(store: store, file: file)
                                         .rowHighlight(selected: store.selectedFileID == file.id, listFocused: listFocused)
+                                        .noScrollBounce()
                                         .tag(file.id)
                                 }
                             } header: {

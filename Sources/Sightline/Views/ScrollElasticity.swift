@@ -12,6 +12,14 @@ import SwiftUI
 ///
 /// Put it in the background of a *row*, not of the `List`: a List's background is applied outside
 /// the scroll view, where `enclosingScrollView` is nil.
+extension View {
+    /// Stops the enclosing list or scroll view from rubber-banding past its content.
+    ///
+    /// Apply it to a **row**, not to the `List` itself: a List's own `.background` is placed
+    /// outside the scroll view, where there is nothing to find.
+    func noScrollBounce() -> some View { background(NoScrollElasticity()) }
+}
+
 struct NoScrollElasticity: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { ElasticityDisablingView() }
 

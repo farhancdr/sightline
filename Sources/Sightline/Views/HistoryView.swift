@@ -51,6 +51,7 @@ struct HistoryList: View {
                 ForEach(store.commits) { commit in
                     CommitRow(commit: commit, isUnpushed: store.unpushedCommits.contains(commit.sha))
                         .rowHighlight(selected: store.selectedCommitID == commit.sha, listFocused: listFocused)
+                        .noScrollBounce()
                         .tag(commit.sha)
                         .onAppear {
                             if commit.sha == store.commits.last?.sha { store.loadMoreHistory() }
@@ -283,6 +284,7 @@ private struct CommitFileList: View {
             ForEach(store.commitFiles) { file in
                 CommitFileRow(file: file)
                     .rowHighlight(selected: store.selectedCommitFileID == file.id, listFocused: listFocused)
+                    .noScrollBounce()
                     .tag(file.id)
             }
         }

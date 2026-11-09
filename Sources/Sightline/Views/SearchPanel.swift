@@ -132,6 +132,7 @@ struct SearchPanel: View {
                         ForEach(file.matches) { match in
                             MatchRow(match: match)
                                 .rowHighlight(selected: selectedMatchID == match.id, listFocused: listFocused)
+                                .noScrollBounce()
                                 .tag(match.id)
                         }
                     }

@@ -53,6 +53,7 @@ struct BranchPicker: View {
                         // Outside the switch button, so it also works on the (disabled) current branch.
                         CopyBranchButton(name: branch.name)
                     }
+                    .noScrollBounce()
                 }
             }
         }
