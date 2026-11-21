@@ -146,6 +146,24 @@ final class MostOpenedSortTests: XCTestCase {
     }
 }
 
+final class MostChangesSortTests: XCTestCase {
+    func testMostChangesRanking() {
+        let a = Repo(path: "/w/services/a", relativePath: "services/a")
+        let b = Repo(path: "/w/services/b", relativePath: "services/b")
+        let c = Repo(path: "/w/apps/c", relativePath: "apps/c")
+        let d = Repo(path: "/w/apps/d", relativePath: "apps/d")
+        func change(_ path: String) -> FileChange { FileChange(path: path, originalPath: nil, area: .unstaged, code: "M") }
+        var dirty3 = RepoStatus(), dirty1 = RepoStatus(), dirty1Ahead = RepoStatus()
+        dirty3.files = ["x", "y", "z"].map(change)
+        dirty1.files = [change("x")]
+        dirty1Ahead.files = [change("x")]
+        dirty1Ahead.ahead = 2
+        let ranked = AppStore.rankByMostChanges([a, b, c, d], statuses: [b.id: dirty1, c.id: dirty3, d.id: dirty1Ahead])
+        // Most changed files first; ties by unpushed commits, then A–Z; clean / unknown last.
+        XCTAssertEqual(ranked.map(\.relativePath), ["apps/c", "apps/d", "services/b", "services/a"])
+    }
+}
+
 final class CreateItemTests: XCTestCase {
     func testCreatesFilesAndFoldersSafely() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("sightline-create-\(UUID().uuidString)").path

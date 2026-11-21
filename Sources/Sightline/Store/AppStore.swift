@@ -38,7 +38,9 @@ final class AppStore {
     private(set) var selectedRepoID: String?
     var repoFilter = ""
 
-    enum RepoSort: String, CaseIterable { case folder = "By Folder", recent = "Recent", mostOpened = "Most Opened" }
+    enum RepoSort: String, CaseIterable {
+        case folder = "By Folder", recent = "Recent", mostOpened = "Most Opened", mostChanges = "Most Changes"
+    }
     private(set) var repoSort: RepoSort
     /// When each repo (by path) was last opened from the sidebar / ⌘P, for "Recent".
     private(set) var lastOpened: [String: Double]
@@ -402,6 +404,22 @@ final class AppStore {
             if ca != cb { return ca > cb }
             let (ta, tb) = (lastOpened[lhs.id] ?? 0, lastOpened[rhs.id] ?? 0)
             if ta != tb { return ta > tb }
+            return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
+        }
+    }
+
+    /// Most changed files first (ties: most unpushed commits), then clean repos; A–Z within ties.
+    /// Re-sorts live as statuses refresh.
+    func rankedByMostChanges(_ repos: [Repo]) -> [Repo] {
+        Self.rankByMostChanges(repos, statuses: statuses)
+    }
+
+    nonisolated static func rankByMostChanges(_ repos: [Repo], statuses: [String: RepoStatus]) -> [Repo] {
+        repos.sorted { lhs, rhs in
+            let (ca, cb) = (statuses[lhs.id]?.changedCount ?? 0, statuses[rhs.id]?.changedCount ?? 0)
+            if ca != cb { return ca > cb }
+            let (aa, ab) = (statuses[lhs.id]?.ahead ?? 0, statuses[rhs.id]?.ahead ?? 0)
+            if aa != ab { return aa > ab }
             return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
         }
     }

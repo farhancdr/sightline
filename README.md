@@ -44,7 +44,7 @@ So Sightline does just those things, quickly.
 - **⌘-click any name** (function, class, variable) to search its repo for it: exact case, whole word, in files
   of the same language (a `.ts` file searches `*.ts, *.tsx, …`). A lightweight "find usages" with no language server.
 - **⌥- / ⌥=: go back / forward** through the places you jumped from (search results, ⌘P, the explorer).
-- **⌘T: jump to a repo**, sorted by folder, most recently opened, or most opened.
+- **⌘T: jump to a repo**, sorted by folder, most recently opened, most opened, or most local changes.
 
 **Made for reviewing AI changes**
 - VS Code-style **diff viewer**: side-by-side or inline, whole-file context, syntax highlighting,

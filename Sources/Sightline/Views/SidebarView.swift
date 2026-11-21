@@ -10,6 +10,7 @@ struct SidebarView: View {
         switch store.repoSort {
         case .recent: return [("Recent", store.rankedByRecent(repos))]
         case .mostOpened: return [("Most Opened", store.rankedByMostOpened(repos))]
+        case .mostChanges: return [("Most Changes", store.rankedByMostChanges(repos))]
         case .folder: break
         }
         var order: [String] = []
@@ -118,7 +119,7 @@ struct SidebarView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Sort repos: by folder, most recently opened, or most opened")
+            .help("Sort repos: by folder, most recently opened, most opened, or most local changes")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
