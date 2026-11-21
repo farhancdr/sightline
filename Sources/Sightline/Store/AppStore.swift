@@ -21,6 +21,7 @@ final class AppStore {
     private static let terminalSchemeKey = "terminalColorScheme"
     private static let markdownPreviewKey = "markdownPreview"
     private static let vimKey = "vimMode"
+    private static let quickOpenRepoOnlyKey = "quickOpenRepoOnly"
     private static let terminalGPUKey = "terminalGPU"
     private static let maxParallelGit = 8
 
@@ -197,6 +198,10 @@ final class AppStore {
     // MARK: Quick open
 
     var quickOpenVisible = false
+    /// ⌘P scope: the selected repo only, or every repo (the default). Tab in the palette toggles it.
+    var quickOpenRepoOnly = UserDefaults.standard.bool(forKey: AppStore.quickOpenRepoOnlyKey) {
+        didSet { UserDefaults.standard.set(quickOpenRepoOnly, forKey: Self.quickOpenRepoOnlyKey) }
+    }
     private(set) var recentFiles: [QuickOpenEntry] = []
     /// Bumped whenever `fileIndex` is replaced, so the palette can re-run its query.
     private(set) var indexVersion = 0

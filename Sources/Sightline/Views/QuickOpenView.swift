@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// ⌘P palette: fuzzy file search across every repo in the workspace.
+/// ⌘P palette: fuzzy file search in the selected repo or across every repo (tabs; Tab key toggles).
 struct QuickOpenView: View {
     let store: AppStore
 
@@ -11,11 +11,17 @@ struct QuickOpenView: View {
         // Derived from the query on every render (~3 ms over ~15k files): results can never lag
         // behind what's typed. Reading indexVersion re-renders when the index finishes building.
         let text = query.trimmingCharacters(in: .whitespaces)
+        let repoID = repoOnly ? store.selectedRepoID : nil
         let shown = text.isEmpty || store.indexVersion < 0
-            ? store.recentFiles
-            : FileIndex.search(text, in: store.fileIndex)
+            ? FileIndex.scoped(store.recentFiles, repoID: repoID)
+            : FileIndex.search(text, in: FileIndex.scoped(store.fileIndex, repoID: repoID))
         content(shown)
     }
+
+    /// Only when a repo is selected; otherwise the palette searches everything.
+    private var repoOnly: Bool { store.quickOpenRepoOnly && store.selectedRepo != nil }
+
+    private var repoName: String { store.selectedRepo?.name ?? "This Repo" }
 
     private func content(_ shown: [QuickOpenEntry]) -> some View {
         VStack(spacing: 0) {
@@ -23,14 +29,21 @@ struct QuickOpenView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 PaletteSearchField(
                     text: $query,
-                    placeholder: "Search files by name across all repos",
+                    placeholder: repoOnly ? "Search files by name in \(repoName)" : "Search files by name across all repos",
                     onMove: { move($0, count: shown.count) },
                     onSubmit: { open(shown) },
-                    onCancel: { store.quickOpenVisible = false }
+                    onCancel: { store.quickOpenVisible = false },
+                    onTab: toggleScope
                 )
                 .frame(height: 22)
             }
-            .padding(12)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            scopeTabs
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
 
             if !shown.isEmpty || !query.isEmpty {
                 Divider()
@@ -47,6 +60,31 @@ struct QuickOpenView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator))
         .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
         .onChange(of: query) { selection = 0 }
+        .onChange(of: store.quickOpenRepoOnly) { selection = 0 }
+    }
+
+    private var scopeTabs: some View {
+        HStack(spacing: 6) {
+            ScopeTab(title: repoName, symbol: "folder", selected: repoOnly,
+                     disabled: store.selectedRepo == nil) { setScope(repoOnly: true) }
+                .help("Search only the selected repo (Tab to switch)")
+            ScopeTab(title: "All Repos", symbol: "square.stack.3d.up", selected: !repoOnly,
+                     disabled: false) { setScope(repoOnly: false) }
+                .help("Search every repo under the root (Tab to switch)")
+            Spacer(minLength: 0)
+            Text("⇥ to switch")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func toggleScope() {
+        setScope(repoOnly: !repoOnly)
+    }
+
+    private func setScope(repoOnly: Bool) {
+        guard !repoOnly || store.selectedRepo != nil else { return }
+        store.quickOpenRepoOnly = repoOnly
     }
 
     private func resultList(_ shown: [QuickOpenEntry]) -> some View {
@@ -110,5 +148,35 @@ struct QuickOpenView: View {
     private func open(_ shown: [QuickOpenEntry]) {
         guard shown.indices.contains(selection) else { return }
         store.openQuickOpenEntry(shown[selection])
+    }
+}
+
+/// "This repo" / "All repos" pill in the ⌘P palette.
+private struct ScopeTab: View {
+    let title: String
+    let symbol: String
+    let selected: Bool
+    let disabled: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(selected ? Color.white : Color.ghMuted)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule().fill(selected ? Color.ghAccent : (hovering ? Color.ghMuted.opacity(0.15) : Color.ghMuted.opacity(0.08)))
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.5 : 1)
+        .onHover { hovering = $0 }
     }
 }

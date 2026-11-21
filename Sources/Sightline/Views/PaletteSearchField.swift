@@ -3,13 +3,15 @@ import SwiftUI
 
 /// AppKit text field for the ⌘P palette. A SwiftUI TextField with `.onKeyPress` handlers in an
 /// overlay stopped propagating keystrokes to its binding after the first character; NSTextField's
-/// delegate reports every edit and lets us handle ↑ ↓ ⏎ ⎋ via the field editor's commands.
+/// delegate reports every edit and lets us handle ↑ ↓ ⏎ ⎋ ⇥ via the field editor's commands.
 struct PaletteSearchField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var onMove: (Int) -> Void
     var onSubmit: () -> Void
     var onCancel: () -> Void
+    /// Tab / ⇧Tab (nil: default field behavior).
+    var onTab: (() -> Void)?
 
     func makeNSView(context: Context) -> NSTextField {
         let field = AutoFocusTextField()
@@ -49,6 +51,9 @@ struct PaletteSearchField: NSViewRepresentable {
             case #selector(NSResponder.moveDown(_:)): parent.onMove(1)
             case #selector(NSResponder.insertNewline(_:)): parent.onSubmit()
             case #selector(NSResponder.cancelOperation(_:)): parent.onCancel()
+            case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
+                guard let onTab = parent.onTab else { return false }
+                onTab()
             default: return false
             }
             return true

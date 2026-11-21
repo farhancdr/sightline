@@ -37,7 +37,7 @@ So Sightline does just those things, quickly.
 - A sidebar with every repo, its branch, ahead/behind counts and number of changed files, all live.
   One click filters it down to **only the repos with changes or unpushed commits**.
 - Changes made by an agent or in a terminal show up immediately (FSEvents watcher, no polling, no manual refresh).
-- **⌘P: Go to File across every repo**, fuzzy-matched (≈15k files indexed in ~0.2 s via `git ls-files`).
+- **⌘P: Go to File in the selected repo or across every repo** (tabs; Tab switches), fuzzy-matched (≈15k files indexed in ~0.2 s via `git ls-files`).
 - **⇧⌘F: search inside files**, like VS Code: match case, whole word, regex, files to include/exclude
   (`node_modules` and `dist` excluded by default). Searches the selected repo, or switch to **All repos**
   (~0.5 s across 50 repos). Results are grouped by file with highlighted matches.
@@ -115,7 +115,7 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 
 | Key | Action |
 |---|---|
-| ⌘P | Go to file (all repos) |
+| ⌘P | Go to file (Tab switches between this repo and all repos) |
 | ⌘N / ⌥⌘N | New file / new folder (in the selected explorer folder; `a/b/c.ts` creates folders too) |
 | ⌘T | Find repo (⏎ opens the top match, ⎋ clears) |
 | ⇧⌘F | Search in files across all repos (Aa / ab / .* toggles) |

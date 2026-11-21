@@ -51,6 +51,12 @@ enum FileIndex {
 
     /// VS Code-ish fuzzy ranking: file-name substring first, then path substring, then a scored
     /// subsequence match (consecutive runs and segment starts score higher).
+    /// The entries in ⌘P's scope: one repo's files, or all of them when `repoID` is nil.
+    static func scoped(_ entries: [QuickOpenEntry], repoID: String?) -> [QuickOpenEntry] {
+        guard let repoID else { return entries }
+        return entries.filter { $0.repoID == repoID }
+    }
+
     static func search(_ query: String, in entries: [QuickOpenEntry], limit: Int = 60) -> [QuickOpenEntry] {
         let q = Array(query.lowercased().replacingOccurrences(of: " ", with: "").utf8)
         guard !q.isEmpty else { return [] }
