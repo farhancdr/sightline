@@ -132,7 +132,7 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 | ⇧⌘E | Open the file's repo in your editor, at the file and caret line |
 | ⌘-click | Search the repo for that name (exact case, whole word, same language) |
 | ⌥⌘R | Reveal in Finder |
-| ⇧⌘L / ⌥⌘P | Pull / Push |
+| ⇧⌘L / ⌥⌘P | Pull / Push (⇧⌘L is "all occurrences" while the editor has focus) |
 | ⌘S | Save file |
 | ⌘W / ⇧⌘W | Close the tab (or diff) / close the window |
 | ⌥⌘→ / ⌥⌘← (⌃Tab also goes to the next) | Next / previous tab |
@@ -144,6 +144,11 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 | ⇧⌘K | Delete line(s) |
 | ⌘] / ⌘[ (or Tab / ⇧Tab on a selection) | Indent / outdent |
 | ⌘L | Select line (repeat to extend) |
+| ⌘D | Select the word, then add the next occurrence as another cursor |
+| ⇧⌘L (in the editor) | A cursor on every occurrence of the selection or word |
+| ⌥-click / ⌥-drag | Add or remove a cursor / column selection |
+| ⌥⌘↑ / ⌥⌘↓ | Add a cursor on the line above / below |
+| Esc | Back to a single cursor |
 | ⇧⌘V | Markdown preview ↔ source |
 | ⌘F | Find in file |
 | ⇧⌘T | Cycle theme (System → Light → Dark) |

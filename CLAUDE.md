@@ -126,6 +126,12 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   (no-op unless the editor has focus); ⌥↑/⌥↓ are handled in `keyDown` so the terminal keeps them. ⌘W closes the
   tab/diff, never the window (⇧⌘W does). Check new shortcuts for collisions:
   `grep -oE 'keyboardShortcut\("[^"]+"(, modifiers: [^)]*\))?' Sources/Sightline/App/SightlineApp.swift | sort | uniq -d`.
+- **Multiple cursors:** `CodeTextView.cursors` (empty = one native selection) in `CodeTextView+MultiCursor.swift`.
+  The native selection mirrors the primary cursor; the others are drawn in `drawBackground`/`draw` (no blink).
+  Edits go through `applyCursorEdits` → `shouldChangeText(inRanges:)` (one undo step). Any selection or text
+  change not made by that code (`applyingCursors == false`: click, undo, find, line commands, reload) collapses to
+  one cursor, so stale positions can't survive. ⇧⌘L is caught in `performKeyEquivalent` only while the editor has
+  focus (the menu keeps it for Pull). Off while Vim mode is on.
 - **Vim mode:** `VimEngine` (Editor/VimEngine.swift) is attached to `CodeTextView.vim` when View → Vim Mode is
   on. Keys reach it from `keyDown` (and `performKeyEquivalent` for ⌃ keys, so Vim beats the menus); ⌘ keys never
   go to Vim. A pending operator owns all following keys (`handleOperatorPending`). Edits use `CodeTextView.replace`

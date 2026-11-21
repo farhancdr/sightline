@@ -70,6 +70,16 @@ struct SightlineApp: App {
                     .keyboardShortcut("[")
                 Button("Select Line") { store.performEditorCommand(#selector(CodeTextView.selectLineExtending(_:))) }
                     .keyboardShortcut("l")
+                Divider()
+                // Multiple cursors (VS Code keys). ⌥-click adds a caret, ⌥-drag selects a column, Esc goes back
+                // to one; ⇧⌘L (all occurrences) is handled by the editor because the menu uses it for Pull.
+                Button("Add Next Occurrence") { store.performEditorCommand(#selector(CodeTextView.addNextOccurrence(_:))) }
+                    .keyboardShortcut("d")
+                Button("Select All Occurrences (⇧⌘L)") { store.performEditorCommand(#selector(CodeTextView.selectAllOccurrences(_:))) }
+                Button("Add Cursor Above") { store.performEditorCommand(#selector(CodeTextView.addCursorAbove(_:))) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                Button("Add Cursor Below") { store.performEditorCommand(#selector(CodeTextView.addCursorBelow(_:))) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 // ⌥↑ / ⌥↓ (move) and ⇧⌥↑ / ⇧⌥↓ (copy) are handled by the editor itself, so the terminal
                 // keeps those keys.
             }

@@ -8,8 +8,84 @@ final class CodeTextView: NSTextView {
     var onCommandClick: ((String) -> Void)?
     /// Line comment token for ⌘/ ("//", "#", "--"), nil when the language has none.
     var lineCommentToken: String?
-    /// Vim mode (nil when off).
-    var vim: VimEngine? { didSet { needsDisplay = true } }
+    /// Vim mode (nil when off). Multiple cursors are off while it's on.
+    var vim: VimEngine? { didSet { cursors = []; needsDisplay = true } }
+
+    // MARK: Multiple cursors (CodeTextView+MultiCursor.swift)
+
+    /// Two or more cursors, sorted; empty while there's a single, native selection.
+    var cursors: [TextCursor] = []
+    var primaryCursor = 0
+    /// Set while the cursor code itself changes the selection/text, so that isn't taken as "collapse".
+    var applyingCursors = false
+    /// ⌘D started from a caret matches whole words only (VS Code).
+    var occurrenceWholeWord = false
+    /// Injectable so tests don't touch the user's clipboard.
+    var cursorPasteboard: NSPasteboard = .general
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        if !applyingCursors {
+            occurrenceWholeWord = false
+            if !cursors.isEmpty {
+                cursors = []
+                needsDisplay = true
+            }
+        }
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+    }
+
+    override func didChangeText() {
+        // Text changed by something other than a multi-cursor edit (undo, reload): positions are stale.
+        if !applyingCursors, !cursors.isEmpty {
+            cursors = []
+            needsDisplay = true
+        }
+        super.didChangeText()
+    }
+
+    override func doCommand(by selector: Selector) {
+        if isMultiCursor, handleMultiCursorCommand(selector) { return }
+        super.doCommand(by: selector)
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        if isMultiCursor, !hasMarkedText(), replacementRange.location == NSNotFound {
+            let text = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
+            return typeAtCursors(text)
+        }
+        collapseCursors()
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    override func copy(_ sender: Any?) {
+        guard isMultiCursor else { return super.copy(sender) }
+        cursorPasteboard.clearContents()
+        cursorPasteboard.setString(copyCursorText(), forType: .string)
+    }
+
+    override func cut(_ sender: Any?) {
+        guard isMultiCursor else { return super.cut(sender) }
+        copy(sender)
+        applyCursorEdits(cursors.map { cursor in
+            let range = cursor.isEmpty ? (string as NSString).lineRange(for: NSRange(location: cursor.head, length: 0)) : cursor.range
+            return CursorEdit(range: range, text: "", cursor: TextCursor(caret: 0))
+        })
+    }
+
+    override func paste(_ sender: Any?) {
+        guard isMultiCursor, let text = cursorPasteboard.string(forType: .string) else { return super.paste(sender) }
+        pasteAtCursors(text)
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawCursorSelections(in: rect)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawCursorCarets(in: dirtyRect)
+    }
 
     // MARK: Vim key routing
 
@@ -21,11 +97,19 @@ final class CodeTextView: NSTextView {
            let key = VimKey.from(event, mode: vim.mode), vim.handle(key) {
             return true
         }
+        // ⇧⌘L selects all occurrences while the editor has focus (elsewhere it's Repository → Pull).
+        if vim == nil, window?.firstResponder === self,
+           event.modifierFlags.intersection([.command, .shift, .option, .control]) == [.command, .shift],
+           event.charactersIgnoringModifiers?.lowercased() == "l" {
+            selectAllOccurrences(nil)
+            return true
+        }
         return super.performKeyEquivalent(with: event)
     }
 
     /// Normal mode draws a block cursor over the character.
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        if isMultiCursor { return } // every caret is drawn by drawCursorCarets (no blinking)
         guard vim?.usesBlockCursor == true else { return super.drawInsertionPoint(in: rect, color: color, turnedOn: flag) }
         var block = rect
         block.size.width = blockCursorWidth
@@ -48,6 +132,7 @@ final class CodeTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if handleOptionClick(event) { return }
         let modifiers = event.modifierFlags
         let isCommandClick = modifiers.contains(.command) && modifiers.isDisjoint(with: [.shift, .option, .control])
         if isCommandClick, event.clickCount == 1, let onCommandClick {
