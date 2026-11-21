@@ -42,30 +42,31 @@ struct CommitBox: View {
                     .strokeBorder(focused ? Color.ghAccent : Color.ghBorder, lineWidth: focused ? 1.5 : 1)
             )
 
-            Button { store.commit(noVerify: false) } label: {
-                HStack(spacing: 5) {
-                    if store.isCommitting {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "checkmark")
+            HStack(spacing: 6) {
+                Button { store.commit(noVerify: false) } label: {
+                    HStack(spacing: 5) {
+                        if store.isCommitting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "checkmark")
+                        }
+                        Text("Commit")
                     }
-                    Text("Commit")
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.return, modifiers: .command)
-            .disabled(!store.canCommit)
-            .help(stagedHelp)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!store.canCommit)
+                .help(stagedHelp)
 
-            Button { store.commit(noVerify: true) } label: {
-                Text("Commit (No Verify)").frame(maxWidth: .infinity)
+                Button { store.commit(noVerify: true) } label: {
+                    Text("No Verify").lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!store.canCommit)
+                .help("Commit (No Verify): git commit --no-verify skips pre-commit and commit-msg hooks")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .disabled(!store.canCommit)
-            .help("git commit --no-verify: skips pre-commit and commit-msg hooks")
+            .controlSize(.regular)
         }
         .padding(10)
     }

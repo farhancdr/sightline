@@ -136,6 +136,10 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
 - **Overlaying views:** don't put headers in `.safeAreaInset` over a List (rows scroll visibly underneath), and
   give draggable handles real layout width: AppKit-backed neighbours (editor, terminal) are drawn on top of any
   SwiftUI overlay that extends past its frame and take the mouse.
+- **macOS 26+ (Liquid Glass):** the repo sidebar floats over the detail column, so any child wider than its
+  fixed-width column spills left *under the sidebar* (the branch name vanished this way). The glass segmented
+  control is much wider than before: `RepoPanel` uses its own `PanelTabs` strip, and the panel is `.clipped()`.
+  Xcode 26+ no longer bundles the Metal toolchain SwiftTerm needs: `xcodebuild -downloadComponent MetalToolchain`.
 - **Dividers:** use `VerticalRule` (theme border color); the system split divider is invisible on the dark sidebar.
 - **No rubber-band in lists:** every list row carries `.noScrollBounce()` (`ScrollElasticity.swift`), which
   clears `NSScrollView.verticalScrollElasticity` so a list stops at its end like VS Code's. It has to sit on a

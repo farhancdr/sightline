@@ -8,19 +8,7 @@ struct RepoPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             BranchBar(store: store)
-            Picker("", selection: $store.panel) {
-                ForEach(AppStore.Panel.allCases, id: \.self) { panel in
-                    if panel == .search {
-                        Image(systemName: "magnifyingglass").help("Search all repos (⇧⌘F)").tag(panel)
-                    } else {
-                        Text(panelTitle(panel)).tag(panel)
-                    }
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 10)
-            .padding(.bottom, 8)
+            PanelTabs(store: store)
             Divider()
             switch store.panel {
             case .changes:
@@ -37,12 +25,77 @@ struct RepoPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
+}
 
-    private func panelTitle(_ panel: AppStore.Panel) -> String {
-        guard panel == .changes, let count = store.selectedStatus?.changedCount, count > 0 else {
-            return panel.rawValue
+/// Changes / Files / History / Search switcher. A custom strip instead of a segmented Picker: since macOS 26
+/// the Liquid Glass segmented control is wider than the column, and an over-wide child pushed the whole
+/// panel (branch name included) under the repo sidebar. This one shrinks with the column.
+private struct PanelTabs: View {
+    let store: AppStore
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(AppStore.Panel.allCases, id: \.self) { panel in
+                PanelTab(
+                    panel: panel,
+                    count: panel == .changes ? (store.selectedStatus?.changedCount ?? 0) : 0,
+                    selected: store.panel == panel
+                ) { store.panel = panel }
+            }
         }
-        return "\(panel.rawValue) (\(count))"
+        .padding(2)
+        .background(Color.ghMuted.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+    }
+}
+
+private struct PanelTab: View {
+    let panel: AppStore.Panel
+    let count: Int
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    private var help: String {
+        switch panel {
+        case .changes: "Changes"
+        case .files: "Files"
+        case .history: "History"
+        case .search: "Search all repos (⇧⌘F)"
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if panel == .search {
+                    Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+                } else {
+                    Text(panel.rawValue).lineLimit(1).minimumScaleFactor(0.85)
+                }
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption2.monospacedDigit().weight(.bold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background((selected ? Color.ghAccent : Color.ghMuted).opacity(0.2), in: Capsule())
+                        .foregroundStyle(selected ? Color.ghAccent : Color.ghMuted)
+                }
+            }
+            .font(.system(size: 12, weight: selected ? .semibold : .medium))
+            .foregroundStyle(selected ? Color.ghText : Color.ghMuted)
+            .frame(maxWidth: panel == .search ? 30 : .infinity, minHeight: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(selected ? Color.ghCanvas : (hovering ? Color.ghMuted.opacity(0.12) : .clear))
+                    .shadow(color: .black.opacity(selected ? 0.12 : 0), radius: 1, y: 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
     }
 }
 

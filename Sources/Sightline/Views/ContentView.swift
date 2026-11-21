@@ -24,6 +24,8 @@ struct ContentView: View {
                                 RepoPanel(store: store)
                                     .frame(width: panelWidth)
                                     .background(Color.ghSidebar)
+                                    // An over-wide child must never spill left under the (floating) repo sidebar.
+                                    .clipped()
                                 ResizeHandle(width: $panelWidth, range: 220...560)
                             }
                             VSplitView {

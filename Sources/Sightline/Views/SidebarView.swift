@@ -26,7 +26,7 @@ struct SidebarView: View {
             header
             List(selection: Binding(get: { store.selectedRepoID }, set: { store.selectRepo($0) })) {
                 ForEach(groups, id: \.name) { group in
-                    Section(group.name) {
+                    Section {
                         ForEach(group.repos) { repo in
                             RepoRow(
                                 repo: repo,
@@ -37,6 +37,12 @@ struct SidebarView: View {
                             .noScrollBounce()
                             .tag(repo.id)
                         }
+                    } header: {
+                        // Explicit color: the default sidebar header is near-invisible on the dark sidebar.
+                        Text(group.name.uppercased())
+                            .font(.caption2.weight(.semibold))
+                            .tracking(0.4)
+                            .foregroundStyle(Color.ghMuted)
                     }
                 }
             }

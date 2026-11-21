@@ -84,9 +84,10 @@ struct MarkdownPreview: NSViewRepresentable {
             let text = controller.text
             Task { [weak self] in
                 let body = await Task.detached(priority: .userInitiated) { MarkdownRenderer.body(text) }.value
-                guard let self, current == self.generation, let webView = self.webView else { return }
-                // JSON-encode the HTML as a JS string literal.
-                let literal = String(decoding: try JSONEncoder().encode([body]), as: UTF8.self).dropFirst().dropLast()
+                // JSON-encode the HTML as a JS string literal (encoding a [String] can't fail).
+                guard let self, current == self.generation, let webView = self.webView,
+                      let json = try? JSONEncoder().encode([body]) else { return }
+                let literal = String(decoding: json, as: UTF8.self).dropFirst().dropLast()
                 let script = "document.getElementById('content').innerHTML = \(literal);"
                     + MermaidSupport.renderCall
                 do {
