@@ -134,29 +134,18 @@ final class MultiCursorTests: XCTestCase {
         XCTAssertFalse(view.isMultiCursor)
     }
 
-    func testOptionClickAddsAndRemovesCarets() throws {
+    /// The cursor logic after AppKit's ⌥-click tracking. The tracking loop itself isn't driven here: it blocks
+    /// waiting for a mouse-up, and a CI runner never delivers a synthetic one (the Release job hung on it).
+    func testOptionClickAddsAndRemovesCarets() {
         let view = makeView("first line\nsecond line")
         view.setSelectedRange(NSRange(location: 0, length: 0))
-        func optionClick(at index: Int) throws {
-            let layoutManager = try XCTUnwrap(view.layoutManager)
-            let glyph = layoutManager.glyphIndexForCharacter(at: index)
-            var rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer!)
-            rect = rect.offsetBy(dx: view.textContainerOrigin.x, dy: view.textContainerOrigin.y)
-            let point = view.convert(NSPoint(x: rect.minX + 0.5, y: rect.midY), to: nil)
-            let window = try XCTUnwrap(view.window)
-            for type in [NSEvent.EventType.leftMouseUp] { // queued so AppKit's tracking loop ends at once
-                window.postEvent(try XCTUnwrap(NSEvent.mouseEvent(
-                    with: type, location: point, modifierFlags: .option, timestamp: 0, windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 0, clickCount: 1, pressure: 0)), atStart: false)
-            }
-            view.mouseDown(with: try XCTUnwrap(NSEvent.mouseEvent(
-                with: .leftMouseDown, location: point, modifierFlags: .option, timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
-        }
-        try optionClick(at: 13)
+        view.finishOptionClick(before: view.allCursors, ranges: [NSRange(location: 13, length: 0)])
         XCTAssertEqual(heads(view), [0, 13])
-        try optionClick(at: 13)
+        view.finishOptionClick(before: view.allCursors, ranges: [NSRange(location: 13, length: 0)])
         XCTAssertFalse(view.isMultiCursor, "⌥-clicking an existing caret removes it")
         XCTAssertEqual(view.selectedRange().location, 0)
+        // ⌥-drag: AppKit's column selection (one range per line) becomes one cursor per line.
+        view.finishOptionClick(before: view.allCursors, ranges: [NSRange(location: 0, length: 3), NSRange(location: 11, length: 3)])
+        XCTAssertEqual(view.cursors.map(\.range), [NSRange(location: 0, length: 3), NSRange(location: 11, length: 3)])
     }
 }

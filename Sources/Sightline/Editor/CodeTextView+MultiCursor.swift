@@ -170,10 +170,16 @@ extension CodeTextView {
         guard vim == nil, isEditable, flags == .option, event.clickCount == 1 else { return false }
         let before = allCursors
         super.mouseDown(with: event) // tracks until mouse-up (column selection while dragging)
-        let ranges = selectedRanges.map(\.rangeValue)
+        finishOptionClick(before: before, ranges: selectedRanges.map(\.rangeValue))
+        return true
+    }
+
+    /// After AppKit's ⌥-click tracking left `ranges` selected: a column selection becomes one cursor per line;
+    /// a plain click adds a caret to `before`, or removes the caret that was already there.
+    func finishOptionClick(before: [TextCursor], ranges: [NSRange]) {
         if ranges.count > 1 {
             setCursors(ranges.map(TextCursor.init(range:)))
-            return true
+            return
         }
         let click = ranges.first ?? NSRange(location: 0, length: 0)
         if click.length == 0, before.count > 1,
@@ -185,7 +191,6 @@ extension CodeTextView {
             let added = TextCursor(range: click)
             setCursors(before + [added], primary: added)
         }
-        return true
     }
 
     // MARK: Editing at every cursor

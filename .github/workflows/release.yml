@@ -39,6 +39,11 @@ jobs:
           swift --version
 
       - name: Test
+        # A hung test (e.g. a modal or an AppKit tracking loop waiting for events) fails here in minutes, and
+        # unbuffered output shows which test it was.
+        timeout-minutes: 15
+        env:
+          NSUnbufferedIO: "YES"
         run: swift test
 
       - name: Pick version
