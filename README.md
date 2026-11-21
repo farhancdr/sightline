@@ -69,7 +69,7 @@ So Sightline does just those things, quickly.
 
 **Just enough to fix things by hand**
 - **Tabs** like VS Code, across repos (with an italic preview tab that the next file replaces until you edit or
-  double-click it). File explorer with git status colors, new file / new folder (⌘N / ⌥⌘N or right-click), and a plain-text editor with VS Code's everyday keys: find/replace, go to
+  double-click it). File explorer with git status colors, new file / new folder (⌘N / ⌥⌘N or right-click), ⇧/⌘-click multi-select, ⌘⌫ to move to the Trash, drag and drop to move (drop from Finder to copy), and a plain-text editor with VS Code's everyday keys: find/replace, go to
   line, toggle comment, move/copy/delete lines, indent/outdent, select line, auto-indent, ⌘S.
 - **Vim mode** (View → Vim Mode): Normal / Insert / Visual / Visual-line, counts, `d c y > < gu gU` with motions
   (`w b e 0 ^ $ gg G f t ; , % { } n N`) and text objects (`iw aw i" a" i( a{ ip`…), `x X s S r J p P o O ~`,
@@ -117,6 +117,7 @@ via **System Settings → Privacy & Security → Open Anyway**, or run
 |---|---|
 | ⌘P | Go to file (Tab switches between this repo and all repos) |
 | ⌘N / ⌥⌘N | New file / new folder (in the selected explorer folder; `a/b/c.ts` creates folders too) |
+| ⌘⌫ (file explorer) | Move the selected files/folders to the Trash (asks first) |
 | ⌘T | Find repo (⏎ opens the top match, ⎋ clears) |
 | ⇧⌘F | Search in files across all repos (Aa / ab / .* toggles) |
 | ⌥- / ⌥= | Go back / forward |

@@ -137,6 +137,17 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   go to Vim. A pending operator owns all following keys (`handleOperatorPending`). Edits use `CodeTextView.replace`
   (undoable); `.` replays recorded keys plus a `.text` key for what was typed in Insert mode. Tests drive it with
   `vim.feed("…")` on a text view hosted in a window (undo needs a window).
+- **Explorer file operations:** the List selection is a `Set` (`ExplorerModel.selection`; `selectedPath` is the
+  focused row and resets it). A plain click opens/toggles as before; ⇧/⌘-click only selects (read from
+  `NSApp.currentEvent`). ⌘⌫ is a local key monitor gated on `explorerListFocused` + a first-responder
+  NSTableView: a menu shortcut would steal ⌘⌫ from the editor/terminal/text fields, and `.onKeyPress` never
+  fires because the table view swallows the key. Rows drag with `.itemProvider` (the table's native drag), never
+  `.onDrag`: that adds a SwiftUI gesture to every row and each click waited ~100 ms to select. A test window
+  never becomes key, so the table ignores synthetic clicks; tests drive `explorerSelectionChanged(_:modifiers:)`.
+  Drags carry one file URL; the rest of a multi-selection comes
+  from `explorerDragPaths`. In-repo drops move (`ExplorerModel.transfer`), outside files are copied; moved
+  tabs reopen at the new path, and unsaved edits block a move. Trash goes through injectable
+  `confirmTrash`/`trashItem` so tests never block on the alert or touch the user's Trash.
 - **Navigation:** jumps go through `AppStore.open(path:line:column:length:record:)`, which records the caret for
   ⌥-/⌥= and reveals the location once the file loads (`pendingReveal`).
 - **Overlaying views:** don't put headers in `.safeAreaInset` over a List (rows scroll visibly underneath), and

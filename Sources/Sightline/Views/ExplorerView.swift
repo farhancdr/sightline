@@ -6,6 +6,7 @@ struct ExplorerView: View {
     let store: AppStore
     let explorer: ExplorerModel
     @FocusState private var listFocused: Bool
+    @State private var headerDropTarget = false
 
     var body: some View {
         let decorations = Decorations(status: store.selectedStatus)
@@ -29,17 +30,33 @@ struct ExplorerView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
+            .background(headerDropTarget ? Color.ghAccent.opacity(0.18) : .clear)
+            // Dropping on the header moves to the repo root.
+            .onDrop(of: [.fileURL], isTargeted: $headerDropTarget) { handleDrop($0, into: explorer.repo.path) }
+            .help("Drop here to move into the repo root")
             Rectangle().fill(Color.ghBorder).frame(height: 1)
             ScrollViewReader { proxy in
-                List(selection: Binding(get: { explorer.selectedPath }, set: { store.explorerSelect($0) })) {
+                // A Set selection gives ⇧-click ranges and ⌘-click toggles for free.
+                List(selection: Binding(get: { explorer.selection }, set: { store.explorerSelectionChanged($0) })) {
                     ForEach(explorer.rows) { row in
                         ExplorerRowView(
                             row: row,
                             decoration: decorations.code(for: row.node),
                             toggle: { explorer.toggle(row.node) },
-                            copyPath: { copy(rootRelative(row.node)) }
+                            copyPath: { copy(rootRelative(row.node)) },
+                            drop: { providers in
+                                // A folder takes the drop; a file drops next to itself.
+                                let dir = row.node.isDirectory ? row.node.path : (row.node.path as NSString).deletingLastPathComponent
+                                return handleDrop(providers, into: dir)
+                            }
                         )
-                        .rowHighlight(selected: explorer.selectedPath == row.id, listFocused: listFocused)
+                        // List-native dragging (the table view's own drag): `.onDrag` adds a gesture to every row
+                        // that delays each click's selection while it waits to see whether it's a drag.
+                        .itemProvider {
+                            store.beginExplorerDrag(row.id)
+                            return NSItemProvider(object: URL(fileURLWithPath: row.node.path) as NSURL)
+                        }
+                        .rowHighlight(selected: explorer.selection.contains(row.id), listFocused: listFocused)
                         .tag(row.id)
                         .id(row.id)
                         .contextMenu {
@@ -58,6 +75,12 @@ struct ExplorerView: View {
                             Button("Reveal in Finder") {
                                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: row.node.path)])
                             }
+                            Divider()
+                            let targets = store.explorerTargets(for: row.id)
+                            Button(targets.count > 1 ? "Move \(targets.count) Items to Trash" : "Move to Trash") {
+                                store.trashExplorerItems(targets)
+                            }
+                            .keyboardShortcut(.delete, modifiers: .command) // shown as a hint; ⌘⌫ is handled below
                         }
                     }
                 }
@@ -65,6 +88,11 @@ struct ExplorerView: View {
                 .scrollContentBackground(.hidden)
                 .focused($listFocused)
                 .environment(\.defaultMinListRowHeight, 22)
+                // ⌘⌫ goes through a key monitor gated on this focus, not a menu shortcut (which would steal ⌘⌫
+                // from the editor, terminal and text fields) nor .onKeyPress (the table view swallows the key).
+                .onChange(of: listFocused, initial: true) { _, focused in store.explorerListFocused = focused }
+                .onDisappear { store.explorerListFocused = false }
+                .onAppear { store.installExplorerKeyMonitor() }
                 .onChange(of: explorer.selectedPath) { _, path in
                     guard let path else { return }
                     withAnimation(nil) { proxy.scrollTo(path) }
@@ -76,6 +104,25 @@ struct ExplorerView: View {
                 }
             }
         }
+    }
+
+    /// Loads the dropped file URLs, then moves (from the explorer) or copies (from Finder) them into `dir`.
+    private func handleDrop(_ providers: [NSItemProvider], into dir: String) -> Bool {
+        let providers = providers.filter { $0.canLoadObject(ofClass: URL.self) }
+        guard !providers.isEmpty else { return false }
+        let group = DispatchGroup()
+        var urls: [URL] = []
+        for provider in providers {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                DispatchQueue.main.async {
+                    if let url { urls.append(url) }
+                    group.leave()
+                }
+            }
+        }
+        group.notify(queue: .main) { store.dropOnExplorer(urls: urls, into: dir) }
+        return true
     }
 
     private func rootRelative(_ node: FileNode) -> String {
@@ -116,7 +163,9 @@ private struct ExplorerRowView: View {
     let decoration: Character?
     let toggle: () -> Void
     let copyPath: () -> Void
+    let drop: ([NSItemProvider]) -> Bool
     @State private var hovering = false
+    @State private var dropTarget = false
     @State private var copied = false
 
     private var color: Color? { Color.ghStatus(decoration == "•" ? "M" : decoration) }
@@ -170,6 +219,13 @@ private struct ExplorerRowView: View {
             }
         }
         .opacity(row.isIgnored ? 0.45 : 1)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(dropTarget ? Color.ghAccent.opacity(0.18) : .clear)
+                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(dropTarget ? Color.ghAccent : .clear))
+                .padding(.horizontal, -4)
+        )
+        .onDrop(of: [.fileURL], isTargeted: $dropTarget, perform: drop)
         .contentShape(Rectangle())
         .noScrollBounce()
         .onHover { hovering = $0 }

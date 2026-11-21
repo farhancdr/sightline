@@ -29,7 +29,10 @@ final class ExplorerModel {
     private(set) var children: [String: [FileNode]] = [:]
     /// Repo-relative ignored paths from git; directories end with "/".
     private(set) var ignored: Set<String> = []
-    var selectedPath: String?
+    /// The focused row (opened file / toggled folder). Setting it makes it the only selected row.
+    var selectedPath: String? { didSet { selection = selectedPath.map { [$0] } ?? [] } }
+    /// Every selected row (⇧/⌘-click); contains `selectedPath` when that's set.
+    private(set) var selection: Set<String> = []
 
     nonisolated static let hiddenNames: Set<String> = [".git", ".DS_Store"]
 
@@ -65,6 +68,63 @@ final class ExplorerModel {
     }
 
     func collapseAll() { expanded.removeAll() }
+
+    /// Multi-selection from ⇧/⌘-click: keeps the focused row if it's still selected.
+    func setSelection(_ paths: Set<String>) {
+        if let selectedPath, paths.contains(selectedPath) {
+            selection = paths
+            return
+        }
+        let first = rows.first { paths.contains($0.id) }?.id
+        selectedPath = first // resets `selection`
+        selection = paths
+    }
+
+    /// Selected paths in display order, without items inside another selected folder.
+    var orderedSelection: [String] {
+        Self.topLevel(rows.map(\.id).filter { selection.contains($0) })
+    }
+
+    /// Drops paths that live inside another path of the list (keeps order).
+    nonisolated static func topLevel(_ paths: [String]) -> [String] {
+        paths.filter { path in !paths.contains { $0 != path && path.hasPrefix($0 + "/") } }
+    }
+
+    struct FileOperationError: LocalizedError {
+        let errorDescription: String?
+    }
+
+    /// Moves (or copies) items into `dir`, all-or-nothing on validation. Items already in `dir` are skipped.
+    /// Returns (old path, new path) pairs for what was moved.
+    @discardableResult
+    nonisolated static func transfer(_ paths: [String], into dir: String, copy: Bool = false) throws -> [(from: String, to: String)] {
+        let manager = FileManager.default
+        var isDir: ObjCBool = false
+        guard manager.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else {
+            throw FileOperationError(errorDescription: "“\((dir as NSString).lastPathComponent)” isn't a folder.")
+        }
+        var plan: [(from: String, to: String)] = []
+        for path in topLevel(paths) {
+            let name = (path as NSString).lastPathComponent
+            if !copy, (path as NSString).deletingLastPathComponent == dir { continue }
+            if dir == path || dir.hasPrefix(path + "/") {
+                throw FileOperationError(errorDescription: "Can't move “\(name)” into itself.")
+            }
+            let destination = dir + "/" + name
+            if manager.fileExists(atPath: destination) || plan.contains(where: { $0.to == destination }) {
+                throw FileOperationError(errorDescription: "“\(name)” already exists in “\((dir as NSString).lastPathComponent)”.")
+            }
+            plan.append((path, destination))
+        }
+        for step in plan {
+            if copy {
+                try manager.copyItem(atPath: step.from, toPath: step.to)
+            } else {
+                try manager.moveItem(atPath: step.from, toPath: step.to)
+            }
+        }
+        return plan
+    }
 
     /// Expands every ancestor of a repo-relative path and selects it.
     func reveal(relativePath: String) {

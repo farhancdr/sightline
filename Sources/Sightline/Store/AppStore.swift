@@ -994,6 +994,160 @@ final class AppStore {
         openFile(path)
     }
 
+    /// List selection changes: a plain click opens/toggles like before; ⇧/⌘-click only (multi-)selects.
+    func explorerSelectionChanged(_ paths: Set<String>, modifiers: NSEvent.ModifierFlags? = nil) {
+        guard let explorer else { return }
+        let flags = modifiers ?? NSApp.currentEvent?.modifierFlags ?? []
+        let modified = !flags.intersection([.shift, .command]).isEmpty
+        if paths.count == 1, !modified, let path = paths.first {
+            explorerSelect(path)
+        } else {
+            explorer.setSelection(paths)
+        }
+    }
+
+    // MARK: Explorer file operations
+
+    /// Paths being dragged out of the explorer (the selection when the dragged row is part of it).
+    @ObservationIgnored private(set) var explorerDragPaths: [String] = []
+    /// Injectable so tests neither block on the alert nor fill the user's Trash.
+    @ObservationIgnored var confirmTrash: (_ message: String, _ info: String) -> Bool = { message, info in
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = info
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+    @ObservationIgnored var trashItem: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+
+    /// The explorer's file list has keyboard focus (kept in sync by ExplorerView).
+    @ObservationIgnored var explorerListFocused = false
+    @ObservationIgnored private var explorerKeyMonitor: Any?
+
+    /// ⌘⌫ in the focused file list moves the selection to the Trash.
+    func installExplorerKeyMonitor() {
+        guard explorerKeyMonitor == nil else { return }
+        explorerKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.keyCode == 51, // ⌫
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function]) == .command,
+                  self.explorerListFocused, event.window?.firstResponder is NSTableView,
+                  let explorer = self.explorer, self.panel == .files
+            else { return event }
+            self.trashExplorerItems(explorer.orderedSelection)
+            return nil
+        }
+    }
+
+    func beginExplorerDrag(_ path: String) {
+        guard let explorer else { return }
+        explorerDragPaths = explorer.selection.contains(path) ? explorer.orderedSelection : [path]
+    }
+
+    /// The rows an action on `path` applies to: the whole selection when `path` is in it, else just `path`.
+    func explorerTargets(for path: String?) -> [String] {
+        guard let explorer else { return [] }
+        guard let path, !explorer.selection.contains(path) else { return explorer.orderedSelection }
+        return [path]
+    }
+
+    /// ⌘⌫ / "Move to Trash": asks first (Trash is recoverable), closes their tabs, refreshes.
+    func trashExplorerItems(_ paths: [String]) {
+        guard let repo = selectedRepo, !paths.isEmpty else { return }
+        let paths = ExplorerModel.topLevel(paths)
+        let message = paths.count == 1
+            ? "Move “\((paths[0] as NSString).lastPathComponent)” to the Trash?"
+            : "Move \(paths.count) items to the Trash?"
+        var info = paths.count == 1 ? "" : paths.map { workspaceRelative($0) }.joined(separator: "\n") + "\n\n"
+        info += "You can restore from the Trash in Finder."
+        let dirty = tabSessions.values.filter { session in session.isDirty && paths.contains { Self.isPath(session.path, inside: $0) } }
+        if !dirty.isEmpty {
+            info += "\nUnsaved changes in \(dirty.map { ($0.path as NSString).lastPathComponent }.joined(separator: ", ")) will be lost."
+        }
+        guard confirmTrash(message, info) else { return }
+        var failures: [String] = []
+        for path in paths {
+            do {
+                try trashItem(URL(fileURLWithPath: path))
+            } catch {
+                failures.append("\((path as NSString).lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        dropTabs(under: paths.filter { !FileManager.default.fileExists(atPath: $0) })
+        explorer?.selectedPath = nil
+        explorer?.reload()
+        Task { await refresh(repo.id) }
+        if !failures.isEmpty { errorMessage = failures.joined(separator: "\n") }
+    }
+
+    /// Drop on the explorer: items dragged inside it are moved into `dir`; files from elsewhere (Finder) are copied.
+    func dropOnExplorer(urls: [URL], into dir: String) {
+        guard let repo = selectedRepo, dir == repo.path || dir.hasPrefix(repo.path + "/") else { return }
+        let paths = urls.map { $0.standardizedFileURL.path }
+        // The drag carries only the grabbed row's URL; the rest of a multi-selection comes from explorerDragPaths.
+        let fromExplorer = !explorerDragPaths.isEmpty && paths.allSatisfy(explorerDragPaths.contains)
+        let sources = fromExplorer ? explorerDragPaths : paths
+        explorerDragPaths = []
+        let insideRepo = sources.allSatisfy { $0.hasPrefix(repo.path + "/") }
+        moveExplorerItems(sources, into: dir, copy: !(fromExplorer && insideRepo))
+    }
+
+    /// Moves (or copies) items into `dir`. Open tabs of moved files follow them; unsaved edits block the move.
+    func moveExplorerItems(_ paths: [String], into dir: String, copy: Bool = false) {
+        guard let repo = selectedRepo, let explorer else { return }
+        let affected = tabList.paths.filter { tab in paths.contains { Self.isPath(tab, inside: $0) } }
+        if !copy, let dirty = affected.compactMap({ tabSessions[$0] }).first(where: \.isDirty) {
+            errorMessage = "Save or close “\((dirty.path as NSString).lastPathComponent)” before moving it."
+            return
+        }
+        let moved: [(from: String, to: String)]
+        do {
+            moved = try ExplorerModel.transfer(paths, into: dir, copy: copy)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        guard !moved.isEmpty else { return }
+        if !copy, !affected.isEmpty {
+            // Reopen moved tabs at their new paths, keeping the active one active.
+            let wasActive = tabList.active
+            func newPath(_ old: String) -> String? {
+                moved.first { Self.isPath(old, inside: $0.from) }.map { $0.to + old.dropFirst($0.from.count) }
+            }
+            dropTabs(under: moved.map(\.from))
+            for old in affected { if let path = newPath(old) { openFile(path, preview: false) } }
+            if let wasActive, let path = newPath(wasActive) {
+                Task { // after the reopened sessions load
+                    for _ in 0..<100 where !tabList.contains(path) { try? await Task.sleep(for: .milliseconds(20)) }
+                    activateTab(path)
+                }
+            }
+        }
+        explorer.reload()
+        if !explorer.expanded.contains(dir), dir != repo.path, let row = explorer.rows.first(where: { $0.id == dir }) {
+            explorer.toggle(row.node)
+        }
+        explorer.setSelection(Set(moved.map(\.to)))
+        Task { await refresh(repo.id) }
+    }
+
+    /// Closes the tabs of these files / of files inside these folders, without asking.
+    private func dropTabs(under paths: [String]) {
+        for tab in tabList.paths where paths.contains(where: { Self.isPath(tab, inside: $0) }) {
+            fileTasks[tab]?.cancel()
+            fileTasks[tab] = nil
+            tabList.close(tab) { [selectedRepoID] in self.repo(forPath: $0)?.id == selectedRepoID }
+            tabSessions[tab] = nil
+        }
+        if let repoID = selectedRepoID, let active = lastActiveTab[repoID], !tabList.contains(active) {
+            lastActiveTab[repoID] = tabList.active
+        }
+    }
+
+    nonisolated static func isPath(_ path: String, inside root: String) -> Bool {
+        path == root || path.hasPrefix(root + "/")
+    }
+
     /// Opens a repo-relative file of the selected repo in the Files panel.
     /// `preview`: VS Code's preview tab (replaced by the next preview open until it's edited or pinned).
     func openInEditor(repoRelativePath: String, preview: Bool = true) {
