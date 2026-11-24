@@ -664,7 +664,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.contains("<code>Array&lt;string&gt;</code>"))
         XCTAssertTrue(html.contains("a &lt; b &amp;&amp; &quot;c&quot;"))
         XCTAssertTrue(html.contains("<ul class=\"tasks\">"))
-        XCTAssertTrue(html.contains("<input type=\"checkbox\" disabled checked> "))
+        XCTAssertNotNil(html.range(of: #"<input type="checkbox" class="task-toggle" data-line="\d+" checked> "#, options: .regularExpression), html)
         XCTAssertTrue(html.contains("<th align=\"left\">Name</th><th align=\"right\">Count</th>"))
         XCTAssertTrue(html.contains("<td align=\"left\">a&lt;b</td>"))
         XCTAssertTrue(html.contains("<span class=\"tok-keyword\">const</span>"))

@@ -12,6 +12,8 @@ struct MarkdownPreview: NSViewRepresentable {
     let baseURL: URL
     /// Opens a local file link inside Sightline; returns false if it can't.
     let openLocalFile: (URL) -> Bool
+    /// A task checkbox was clicked: (1-based source line, new checked state).
+    let toggleTask: (Int, Bool) -> Void
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -19,6 +21,10 @@ struct MarkdownPreview: NSViewRepresentable {
         for script in MermaidSupport.userScripts() {
             configuration.userContentController.addUserScript(script)
         }
+        configuration.userContentController.addUserScript(TaskSupport.userScript)
+        configuration.userContentController.add(
+            WeakMessageHandler(context.coordinator), contentWorld: .defaultClient, name: TaskSupport.handlerName
+        )
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground") // no white flash in dark mode
@@ -28,17 +34,19 @@ struct MarkdownPreview: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.openLocalFile = openLocalFile
+        context.coordinator.toggleTask = toggleTask
         context.coordinator.attach(webView: webView, controller: controller, baseURL: baseURL)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         coordinator.detach()
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(openLocalFile: openLocalFile) }
+    func makeCoordinator() -> Coordinator { Coordinator(openLocalFile: openLocalFile, toggleTask: toggleTask) }
 
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         private weak var webView: WKWebView?
         private weak var controller: EditorController?
         private var baseURL: URL?
@@ -46,8 +54,18 @@ struct MarkdownPreview: NSViewRepresentable {
         private var pending: DispatchWorkItem?
         private var generation = 0
         var openLocalFile: (URL) -> Bool
+        var toggleTask: (Int, Bool) -> Void
 
-        init(openLocalFile: @escaping (URL) -> Bool) { self.openLocalFile = openLocalFile }
+        init(openLocalFile: @escaping (URL) -> Bool, toggleTask: @escaping (Int, Bool) -> Void) {
+            self.openLocalFile = openLocalFile
+            self.toggleTask = toggleTask
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == TaskSupport.handlerName, let body = message.body as? [String: Any],
+                  let line = (body["line"] as? NSNumber)?.intValue, let checked = body["checked"] as? Bool else { return }
+            toggleTask(line, checked)
+        }
 
         func attach(webView: WKWebView, controller: EditorController, baseURL: URL) {
             guard self.controller !== controller || self.webView !== webView else { return }
@@ -118,6 +136,34 @@ struct MarkdownPreview: NSViewRepresentable {
     }
 }
 
+/// Clicks on task checkboxes (`input.task-toggle`) go to Swift through a message handler that only the app's
+/// isolated content world can reach; page scripts stay disabled.
+enum TaskSupport {
+    static let handlerName = "sightlineTask"
+
+    static let source = """
+    document.addEventListener('change', function (event) {
+      const box = event.target;
+      if (!(box instanceof HTMLInputElement) || !box.classList.contains('task-toggle')) { return; }
+      window.webkit.messageHandlers.sightlineTask.postMessage({ line: Number(box.dataset.line), checked: box.checked });
+    }, true);
+    """
+
+    static var userScript: WKUserScript {
+        WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient)
+    }
+}
+
+/// WKUserContentController retains its handlers; this keeps it from retaining the coordinator.
+final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var target: (any WKScriptMessageHandler)?
+    init(_ target: any WKScriptMessageHandler) { self.target = target }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(userContentController, didReceive: message)
+    }
+}
+
 /// HTML shell + GitHub-like markdown CSS (Primer colors, light and dark).
 enum MarkdownPage {
     static func html(body: String) -> String {
@@ -154,6 +200,7 @@ enum MarkdownPage {
     blockquote { padding: 0 1em; color: var(--muted); border-left: .25em solid var(--border); }
     ul, ol { padding-left: 2em; } li + li { margin-top: .25em; } li > p { margin: 0; }
     ul.tasks { list-style: none; padding-left: 1.2em; } ul.tasks input { margin: 0 .3em 0 -1.2em; vertical-align: middle; }
+    input.task-toggle { cursor: pointer; }
     code, pre { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
     code { padding: .2em .4em; border-radius: 6px; background: var(--code-bg); }
     pre { padding: 16px; overflow: auto; border-radius: 6px; background: var(--subtle); }

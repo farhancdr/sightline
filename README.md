@@ -77,7 +77,8 @@ So Sightline does just those things, quickly.
   `gd` (search the repo for the word). The mode shows in the file header.
 - **Markdown preview** (⇧⌘V, or the eye icon): GitHub-styled, with highlighted code blocks and
   **Mermaid diagrams rendered as pictures**. Handy for the plans and design notes agents write; it refreshes when
-  the agent edits the file.
+  the agent edits the file. **Click a task checkbox** (`- [ ]`) to tick it off: the file is updated and saved
+  (⌘Z undoes it).
 - **One terminal per repo**, already `cd`'d into it and kept alive while you switch repos (⌘J to toggle,
   ⌥J to kill and relaunch). GPU (Metal) rendering, 10,000 lines of scrollback, and your Nerd Font is picked up
   automatically so prompt icons render. Terminal colors stay dark by default (View → Terminal Colors).

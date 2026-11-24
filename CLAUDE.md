@@ -110,6 +110,10 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   via `APP_RES`) and its render routine are injected as `WKUserScript`s in `.defaultClient`, so diagrams render
   while page scripts stay disabled (`MermaidPreviewTests` checks both). `replaceText` posts
   `NSText.didChangeNotification` so disk reloads refresh the preview.
+  Task checkboxes carry `data-line` (the item's source line); `TaskSupport`'s script (`.defaultClient`) posts clicks
+  to a message handler registered in that world only, and `AppStore.toggleMarkdownTask` rewrites `[ ]`/`[x]` via
+  `MarkdownTasks.edit` (which re-checks the line is a task, since raw HTML could fake the input), then saves unless
+  the buffer already had unsaved edits.
 - **Workspace search:** `WorkspaceSearch` runs `git grep -z -n --column -m 100` per repo (8 in parallel), twice:
   tracked files, then `--untracked` (merged, deduped by path), because `--untracked` alone skips *tracked* files
   inside gitignored folders. Default scope is the selected repo; default exclude is `node_modules, dist` (a plain

@@ -167,7 +167,8 @@ private struct FilePane: View {
                     MarkdownPreview(
                         controller: controller,
                         baseURL: URL(fileURLWithPath: (editor.path as NSString).deletingLastPathComponent, isDirectory: true),
-                        openLocalFile: { store.openLocalFile($0) }
+                        openLocalFile: { store.openLocalFile($0) },
+                        toggleTask: { store.toggleMarkdownTask(in: editor, line: $0, checked: $1) }
                     )
                 } else if let controller = editor.controller {
                     CodeEditorView(controller: controller)

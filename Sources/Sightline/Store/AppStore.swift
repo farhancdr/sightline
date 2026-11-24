@@ -1196,7 +1196,7 @@ final class AppStore {
             return
         }
         guard fileTasks[path] == nil else { return }
-        fileTasks[path] = Task {
+        fileTasks[path] = Task { [self] in
             defer { fileTasks[path] = nil }
             let content = await Task.detached(priority: .userInitiated) { FileContent.load(path: path) }.value
             // Dropped if the user switched to another repo meanwhile.
@@ -1351,6 +1351,23 @@ final class AppStore {
         guard path.hasPrefix(repo.path + "/"), FileManager.default.fileExists(atPath: path) else { return false }
         openInEditor(repoRelativePath: String(path.dropFirst(repo.path.count + 1)))
         return true
+    }
+
+    /// A task checkbox clicked in the markdown preview: rewrites `[ ]` / `[x]` in the buffer (one undo step)
+    /// and saves, unless the buffer already had unsaved edits (those stay unsaved; the toggle joins them).
+    func toggleMarkdownTask(in editor: EditorSession, line: Int, checked: Bool) {
+        guard let textView = editor.controller?.textView,
+              let edit = MarkdownTasks.edit(in: textView.string, line: line, checked: checked) else { return }
+        let wasDirty = editor.isDirty
+        guard textView.shouldChangeText(in: edit.range, replacementString: edit.replacement) else { return }
+        textView.textStorage?.replaceCharacters(in: edit.range, with: edit.replacement)
+        textView.didChangeText()
+        guard !wasDirty else { return }
+        do {
+            try editor.save()
+        } catch {
+            errorMessage = "Could not save \(editor.path): \(error.localizedDescription)"
+        }
     }
 
     /// Workspace-root-relative path of the change shown in the diff view.

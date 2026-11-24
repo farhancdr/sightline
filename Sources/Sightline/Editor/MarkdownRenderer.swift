@@ -177,7 +177,14 @@ private struct HTMLWalker: MarkupWalker {
     mutating func visitListItem(_ listItem: ListItem) {
         html += "<li>"
         if let checkbox = listItem.checkbox {
-            html += "<input type=\"checkbox\" disabled\(checkbox == .checked ? " checked" : "")> "
+            // Clickable when we know its source line: the preview's task script reports the click and
+            // `MarkdownTasks` rewrites `[ ]` / `[x]` on that line.
+            let state = checkbox == .checked ? " checked" : ""
+            if let line = listItem.range?.lowerBound.line {
+                html += "<input type=\"checkbox\" class=\"task-toggle\" data-line=\"\(line)\"\(state)> "
+            } else {
+                html += "<input type=\"checkbox\" disabled\(state)> "
+            }
         }
         descendInto(listItem)
         html += "</li>\n"
@@ -232,3 +239,30 @@ private struct HTMLWalker: MarkupWalker {
         html += "</\(tag)>"
     }
 }
+
+/// Task-list checkboxes clicked in the preview. The edit is found from the item's 1-based source line, and
+/// only when that line really is a task item (raw HTML in a file could fake a `task-toggle` input).
+enum MarkdownTasks {
+    // Optional blockquote markers, indentation, a list marker, then `[ ]` / `[x]` / `[X]`.
+    private static let pattern = try! NSRegularExpression(pattern: #"^[ \t]*(?:>[ \t]*)*(?:[-*+]|\d{1,9}[.)])[ \t]+\[([ xX])\]"#)
+
+    /// The one-character edit that sets the task on `line` to `checked`; nil if the line isn't a task item
+    /// or already has that state.
+    static func edit(in text: String, line: Int, checked: Bool) -> (range: NSRange, replacement: String)? {
+        let ns = text as NSString
+        guard line >= 1 else { return nil }
+        var start = 0
+        for _ in 1..<line {
+            let next = ns.range(of: "\n", range: NSRange(location: start, length: ns.length - start))
+            guard next.location != NSNotFound else { return nil }
+            start = NSMaxRange(next)
+        }
+        let lineRange = ns.lineRange(for: NSRange(location: start, length: 0))
+        guard let match = pattern.firstMatch(in: text, range: lineRange) else { return nil }
+        let mark = match.range(at: 1)
+        let isChecked = ns.substring(with: mark) != " "
+        guard isChecked != checked else { return nil }
+        return (mark, checked ? "x" : " ")
+    }
+}
+
