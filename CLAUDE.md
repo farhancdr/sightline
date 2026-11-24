@@ -105,7 +105,9 @@ scripts/                   layout-dmg.sh (Finder layout), render-assets.swift, n
   The combined `--arch arm64 --arch x86_64` build fails; build each arch and `lipo`.
 - **Markdown preview:** `MarkdownRenderer` walks the swift-markdown AST itself. swift-markdown's `HTMLFormatter`
   does not HTML-escape text or code, so never use it. The WKWebView runs with page JavaScript disabled; live
-  updates replace `#content` via `evaluateJavaScript(… contentWorld: .defaultClient)` to keep scroll position.
+  updates replace `#content` via `evaluateJavaScript(… contentWorld: .defaultClient)` to keep scroll position. The update
+  script (`MarkdownPage.updateScript`) must end in a plain value: the async Mermaid call returns a Promise, which
+  `evaluateJavaScript` rejects, and the fallback full reload jumped to the top.
   The preview replaces the editor (no split). Mermaid (`Resources/Vendor/mermaid.min.js`, copied into the .app
   via `APP_RES`) and its render routine are injected as `WKUserScript`s in `.defaultClient`, so diagrams render
   while page scripts stay disabled (`MermaidPreviewTests` checks both). `replaceText` posts

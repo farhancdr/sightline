@@ -102,12 +102,8 @@ struct MarkdownPreview: NSViewRepresentable {
             let text = controller.text
             Task { [weak self] in
                 let body = await Task.detached(priority: .userInitiated) { MarkdownRenderer.body(text) }.value
-                // JSON-encode the HTML as a JS string literal (encoding a [String] can't fail).
                 guard let self, current == self.generation, let webView = self.webView,
-                      let json = try? JSONEncoder().encode([body]) else { return }
-                let literal = String(decoding: json, as: UTF8.self).dropFirst().dropLast()
-                let script = "document.getElementById('content').innerHTML = \(literal);"
-                    + MermaidSupport.renderCall
+                      let script = MarkdownPage.updateScript(body: body) else { return }
                 do {
                     _ = try await webView.evaluateJavaScript(script, contentWorld: .defaultClient)
                 } catch {
@@ -166,6 +162,16 @@ final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
 
 /// HTML shell + GitHub-like markdown CSS (Primer colors, light and dark).
 enum MarkdownPage {
+    /// Replaces `#content` in place, keeping the scroll position. It must end in a plain value: the Mermaid
+    /// render call returns a Promise, which `evaluateJavaScript` rejects as an unsupported result type, and
+    /// that error made every update fall back to a full reload that jumped to the top.
+    static func updateScript(body: String) -> String? {
+        // JSON-encode the HTML as a JS string literal.
+        guard let json = try? JSONEncoder().encode([body]) else { return nil }
+        let literal = String(decoding: json, as: UTF8.self).dropFirst().dropLast()
+        return "document.getElementById('content').innerHTML = \(literal);" + MermaidSupport.renderCall + "\n0;"
+    }
+
     static func html(body: String) -> String {
         """
         <!doctype html>

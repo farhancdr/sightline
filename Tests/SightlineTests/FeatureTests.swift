@@ -740,6 +740,36 @@ final class MermaidPreviewTests: XCTestCase {
         )
         XCTAssertTrue(evil == nil || evil is NSNull, "page <script> must not run")
     }
+
+    /// Live updates replace `#content` in place: the script must not throw (a Promise result did, and the
+    /// fallback reload scrolled back to the top) and the scroll position must survive.
+    @MainActor
+    func testLiveUpdateKeepsScrollPosition() async throws {
+        let vendored = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/Vendor/mermaid.min.js")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: vendored.path), "mermaid.min.js not vendored")
+        MermaidSupport.sourceURLOverride = vendored
+        defer { MermaidSupport.sourceURLOverride = nil }
+
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        MermaidSupport.userScripts().forEach(configuration.userContentController.addUserScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 600, height: 400), configuration: configuration)
+        let waiter = LoadWaiter()
+        webView.navigationDelegate = waiter
+        let markdown = (1...200).map { "- [ ] task \($0)" }.joined(separator: "\n")
+        await withCheckedContinuation { continuation in
+            waiter.continuation = continuation
+            webView.loadHTMLString(MarkdownPage.html(body: MarkdownRenderer.body(markdown)), baseURL: nil)
+        }
+        _ = try await webView.evaluateJavaScript("window.scrollTo(0, 1500); 0", contentWorld: .defaultClient)
+        let updated = MarkdownRenderer.body(markdown.replacingOccurrences(of: "- [ ] task 100", with: "- [x] task 100"))
+        _ = try await webView.evaluateJavaScript(try XCTUnwrap(MarkdownPage.updateScript(body: updated)),
+                                                 contentWorld: .defaultClient)
+        let y = try await webView.evaluateJavaScript("window.scrollY", contentWorld: .defaultClient)
+        XCTAssertEqual((y as? NSNumber)?.intValue, 1500)
+    }
 }
 
 final class WorkspaceSearchTests: XCTestCase {
